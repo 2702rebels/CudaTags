@@ -28,7 +28,7 @@ either expressed or implied, of the Regents of The University of Michigan.
 
 #define _GNU_SOURCE  // Possible fix for 16.04
 #define __USE_GNU
-#include "common/pthreads_cross.h"
+#include "common/pthreads_cross.cuh"
 #include <assert.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -39,8 +39,8 @@ either expressed or implied, of the Regents of The University of Michigan.
 #include <unistd.h>
 #endif
 
-#include "workerpool.h"
-#include "debug_print.h"
+#include "workerpool.cuh"
+#include "debug_print.cuh"
 
 struct workerpool {
     int nthreads;
@@ -97,13 +97,13 @@ workerpool_t *workerpool_create(int nthreads)
 {
     assert(nthreads > 0);
 
-    workerpool_t *wp = calloc(1, sizeof(workerpool_t));
+    workerpool_t *wp = (workerpool_t *)calloc(1, sizeof(workerpool_t));
     wp->nthreads = nthreads;
     wp->tasks = zarray_create(sizeof(struct task));
     wp->start_predicate = false;
 
     if (nthreads > 1) {
-        wp->threads = calloc(wp->nthreads, sizeof(pthread_t));
+        wp->threads = (pthread_t *)calloc(wp->nthreads, sizeof(pthread_t));
 
         pthread_mutex_init(&wp->mutex, NULL);
         pthread_cond_init(&wp->startcond, NULL);

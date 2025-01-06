@@ -33,12 +33,12 @@ extern "C" {
 
 #include <stdlib.h>
 
-#include "common/matd.h"
-#include "common/image_u8.h"
-#include "common/zarray.h"
-#include "common/workerpool.h"
-#include "common/timeprofile.h"
-#include "common/pthreads_cross.h"
+#include "common/matd.cuh"
+#include "common/image_u8.cuh"
+#include "common/zarray.cuh"
+#include "common/workerpool.cuh"
+#include "common/timeprofile.cuh"
+#include "common/pthreads_cross.cuh"
 
 #define APRILTAG_TASKS_PER_THREAD_TARGET 10
 

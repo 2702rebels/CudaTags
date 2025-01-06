@@ -27,8 +27,11 @@ either expressed or implied, of the Regents of The University of Michigan.
 
 #pragma once
 
-#include "zarray.h"
+#include "zarray.cuh"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 typedef struct workerpool workerpool_t;
 
 // as a special case, if nthreads==1, no additional threads are
@@ -47,3 +50,6 @@ void workerpool_run_single(workerpool_t *wp);
 int workerpool_get_nthreads(workerpool_t *wp);
 
 int workerpool_get_nprocs();
+#ifdef __cplusplus
+};
+#endif

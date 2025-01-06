@@ -30,7 +30,7 @@ of the authors and should not be interpreted as representing official policies,
 either expressed or implied, of the Regents of The University of Michigan.
 */
 
-#include "apriltag.h"
+#include "apriltag.cuh"
 
 #define _USE_MATH_DEFINES
 #include <math.h>
@@ -40,19 +40,19 @@ either expressed or implied, of the Regents of The University of Michigan.
 #include <stdio.h>
 #include <errno.h>
 
-#include "common/image_u8.h"
-#include "common/image_u8x3.h"
-#include "common/zarray.h"
-#include "common/matd.h"
-#include "common/homography.h"
-#include "common/timeprofile.h"
-#include "common/math_util.h"
-#include "common/g2d.h"
-#include "common/debug_print.h"
+#include "common/image_u8.cuh"
+#include "common/image_u8x3.cuh"
+#include "common/zarray.cuh"
+#include "common/matd.cuh"
+#include "common/homography.cuh"
+#include "common/timeprofile.cuh"
+#include "common/math_util.cuh"
+#include "common/g2d.cuh"
+#include "common/debug_print.cuh"
 
-#include "apriltag_math.h"
+#include "apriltag_math.cuh"
 
-#include "common/postscript_utils.h"
+#include "common/postscript_utils.cuh"
 
 #ifdef _WIN32
 static inline void srandom(unsigned int seed)
@@ -159,7 +159,7 @@ static void quad_destroy(struct quad *quad)
 
 static struct quad *quad_copy(struct quad *quad)
 {
-    struct quad *q = calloc(1, sizeof(struct quad));
+    struct quad *q = (struct quad *)calloc(1, sizeof(struct quad));
     memcpy(q, quad, sizeof(struct quad));
     if (quad->H)
         q->H = matd_copy(quad->H);
@@ -197,7 +197,7 @@ static void quick_decode_init(apriltag_family_t *family, int maxhamming)
     assert(family->impl == NULL);
     assert(family->ncodes < 65536);
 
-    struct quick_decode *qd = calloc(1, sizeof(struct quick_decode));
+    struct quick_decode *qd = (struct quick_decode *)calloc(1, sizeof(struct quick_decode));
     int capacity = family->ncodes;
 
     int nbits = family->nbits;
@@ -216,7 +216,7 @@ static void quick_decode_init(apriltag_family_t *family, int maxhamming)
 //    debug_print("capacity %d, size: %.0f kB\n",
 //           capacity, qd->nentries * sizeof(struct quick_decode_entry) / 1024.0);
 
-    qd->entries = calloc(qd->nentries, sizeof(struct quick_decode_entry));
+    qd->entries = (struct quick_decode_entry *)calloc(qd->nentries, sizeof(struct quick_decode_entry));
     if (qd->entries == NULL) {
         debug_print("Failed to allocate hamming decode table\n");
         // errno already set to ENOMEM (Error No MEMory) by calloc() failure
@@ -481,7 +481,8 @@ static matd_t* homography_compute2(double c[4][4]) {
         }
         A[col*9 + 8] = (A[col*9 + 8] - sum)/A[col*9 + col];
     }
-    return matd_create_data(3, 3, (double[]) { A[8], A[17], A[26], A[35], A[44], A[53], A[62], A[71], 1 });
+	double tmp[]= { A[8], A[17], A[26], A[35], A[44], A[53], A[62], A[71], 1 };
+    return matd_create_data(3, 3, tmp );
 }
 
 // returns non-zero if an error occurs (i.e., H has no inverse)
@@ -534,7 +535,7 @@ static double value_for_pixel(image_u8_t *im, double px, double py) {
 }
 
 static void sharpen(apriltag_detector_t* td, double* values, int size) {
-    double *sharpened = malloc(sizeof(double)*size*size);
+    double *sharpened = (double *)malloc(sizeof(double)*size*size);
     double kernel[9] = {
         0, -1, 0,
         -1, 4, -1,
@@ -589,12 +590,12 @@ static float quad_decode(apriltag_detector_t* td, apriltag_family_t *family, ima
         0,
 
         // right white column
-        family->width_at_border + 0.5, .5,
+        family->width_at_border + 0.5F, .5,
         0, 1,
         1,
 
         // right black column
-        family->width_at_border - 0.5, .5,
+        family->width_at_border - 0.5F, .5,
         0, 1,
         0,
 
@@ -609,12 +610,12 @@ static float quad_decode(apriltag_detector_t* td, apriltag_family_t *family, ima
         0,
 
         // bottom white row
-        0.5, family->width_at_border + 0.5,
+        0.5, family->width_at_border + 0.5F,
         1, 0,
         1,
 
         // bottom black row
-        0.5, family->width_at_border - 0.5,
+        0.5, family->width_at_border - 0.5F,
         1, 0,
         0
 
@@ -683,7 +684,7 @@ static float quad_decode(apriltag_detector_t* td, apriltag_family_t *family, ima
     float black_score = 0, white_score = 0;
     float black_score_count = 1, white_score_count = 1;
 
-    double *values = calloc(family->total_width*family->total_width, sizeof(double));
+    double *values = (double *)calloc(family->total_width*family->total_width, sizeof(double));
 
     int min_coord = (family->width_at_border - family->total_width)/2;
     for (uint32_t i = 0; i < family->nbits; i++) {
@@ -953,7 +954,7 @@ static void quad_decode_task(void *_u)
             float decision_margin = quad_decode(td, family, im, quad, &entry, task->im_samples);
 
             if (decision_margin >= 0 && entry.hamming < 255) {
-                apriltag_detection_t *det = calloc(1, sizeof(apriltag_detection_t));
+                apriltag_detection_t *det = (apriltag_detection_t *)calloc(1, sizeof(apriltag_detection_t));
 
                 det->family = family;
                 det->id = entry.id;
@@ -1162,7 +1163,7 @@ zarray_t *apriltag_detector_detect(apriltag_detector_t *td, image_u8_t *im_orig)
 
         int chunksize = 1 + zarray_size(quads) / (APRILTAG_TASKS_PER_THREAD_TARGET * td->nthreads);
 
-        struct quad_decode_task *tasks = malloc(sizeof(struct quad_decode_task)*(zarray_size(quads) / chunksize + 1));
+        struct quad_decode_task *tasks = (struct quad_decode_task *)malloc(sizeof(struct quad_decode_task)*(zarray_size(quads) / chunksize + 1));
 
         int ntasks = 0;
         for (int i = 0; i < zarray_size(quads); i+= chunksize) {
@@ -1361,9 +1362,9 @@ zarray_t *apriltag_detector_detect(apriltag_detector_t *td, image_u8_t *im_orig)
 
             for (int j = 0; j < 4; j++) {
                 int k = (j + 1) & 3;
+				uint8_t gru8[] = { uint8_t(rgb[0]), uint8_t(rgb[1]), uint8_t(rgb[2]) };
                 image_u8x3_draw_line(out,
-                                     det->p[j][0], det->p[j][1], det->p[k][0], det->p[k][1],
-                                     (uint8_t[]) { rgb[0], rgb[1], rgb[2] });
+                                     det->p[j][0], det->p[j][1], det->p[k][0], det->p[k][1], gru8 );
             }
         }
 

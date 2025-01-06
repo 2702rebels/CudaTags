@@ -35,8 +35,8 @@ extern "C" {
 #include <string.h>
 #include <stdint.h>
 
-#include "time_util.h"
-#include "zarray.h"
+#include "time_util.cuh"
+#include "zarray.cuh"
 
 struct timeprofile_entry
 {

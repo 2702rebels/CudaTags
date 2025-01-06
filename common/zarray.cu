@@ -28,15 +28,15 @@ either expressed or implied, of the Regents of The University of Michigan.
 #include <string.h>
 #include <assert.h>
 
-#include "zarray.h"
+#include "zarray.cuh"
 
 int zstrcmp(const void * a_pp, const void * b_pp)
 {
     assert(a_pp != NULL);
     assert(b_pp != NULL);
 
-    char * a = *(void**)a_pp;
-    char * b = *(void**)b_pp;
+    char * a = *(char**)a_pp;
+    char * b = *(char**)b_pp;
 
     return strcmp(a,b);
 }

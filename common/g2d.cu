@@ -30,8 +30,8 @@ either expressed or implied, of the Regents of The University of Michigan.
 #include <stdio.h>
 #include <string.h>
 
-#include "g2d.h"
-#include "common/math_util.h"
+#include "g2d.cuh"
+#include "common/math_util.cuh"
 
 double g2d_distance(const double a[2], const double b[2])
 {
