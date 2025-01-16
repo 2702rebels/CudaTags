@@ -45,6 +45,7 @@ struct MPool {
 
 struct cudaPool {
 	size_t		m_stTaskMem;
+	size_t		m_stHostMem;
 	size_t		m_stTasks;
 	size_t		m_stAlloc;
 };
@@ -72,6 +73,17 @@ static inline __host__ __device__ void vSetFootStone( MPElmnt *p )
 	MPFootStone *pFS = (MPFootStone *)(((uint8_t *)p) + p->u32Len - sizeof(MPFootStone));
 	pFS->u32FootStone = MEM_FS;
 	pFS->u32Len = p->u32Len;
+}
+
+static inline __host__ __device__ MPool *getMemPool( cudaPool *pcp, int nTask )
+{
+	uint8_t *pu8 = (uint8_t *)&pcp[1];
+	if (nTask == 0) {
+		return (MPool *)pu8;
+	}
+	else {
+		return (MPool *)(pu8 + pcp->m_stHostMem + (nTask - 1) * pcp->m_stTaskMem);
+	}
 }
 
 static void MPoolInit( MPool *p, size_t s, int tid )
@@ -112,38 +124,62 @@ static void MPoolInit( MPool *p, size_t s, int tid )
 	p->mlfree.pTail = pHead;
 }
 
+static __host__ __device__ void vCheckBlock( MPool *pmp, MPElmnt *pel, char const *pszDesc )
+{
+#ifndef __CUDA_ARCH__
+	if (!pszDesc)
+		pszDesc = "";
+
+	if (pel->pmp != pmp) {
+		printf( "%spmp not correct\n", pszDesc );
+		exit(1);
+	}
+	if (pel->u16HeadStone != MEM_HS) {
+		printf( "%sHeadstone Invalid\n", pszDesc );
+		exit(1);
+	}
+
+	MPFootStone *pfs = (MPFootStone *)(((uint8_t *)pel) + pel->u32Len - sizeof(MPFootStone));
+	if (pfs->u32FootStone != MEM_FS) {
+		printf( "%sFootstone Invalid\n", pszDesc );
+		exit(1);
+	}
+	if (pfs->u32Len != pel->u32Len) {
+		printf( "%sHead/Foot size Mismatch: %d/%d\n", pszDesc, pel->u32Len, pfs->u32Len );
+		exit(1);
+	}
+#endif
+}
+
 void vCheckMPool( MPool *pmp )
 {
 	MPElmnt *pel = (MPElmnt *)&pmp[1];
 	
-	if (pel->u16HeadStone != MEM_HS) {
-		printf( "Incorrect HeadStone\n" );
-		exit ( 1 );
-	}
+	vCheckBlock( pmp, pel, "vCheckMPool:" );
 	do {
 		printf( "Mem %p: %d  %u\n", pel, pel->u8Flags, pel->u32Len );
+
 		pel = (MPElmnt *)(((uint8_t *)pel) + pel->u32Len);
 		if (pel->u16HeadStone != MEM_HS) {
 			printf( "Incorrect HeadStone\n" );
 			exit ( 1 );
 		}
+		vCheckBlock( pmp, pel, "vCheckMpool:" );
 	} while (pel->u8Flags != MEM_TAILBLOCK);
 
 	printf( "Free List:\n" );
 	pel = pmp->mlfree.pHead;
 	while( pel ) {
 		printf( "Mem %p: %d  %u\n", pel, pel->u8Flags, pel->u32Len );
+		vCheckBlock( pmp, pel, "vCheckMPool:" );
 		pel = pel->mlfree.pNext;
 	}
 }
 
 void vCheckPool( cudaPool *pcp, int nTask )
 {
-	uint8_t *pu8 = (uint8_t *)&pcp[1];
-	MPool *pmp = (MPool *)(pu8 + nTask * pcp->m_stTaskMem);
-	
 	printf( "Memory Pool %d:\n", nTask );
-	vCheckMPool( pmp );
+	vCheckMPool( getMemPool( pcp, nTask ) );
 }
 
 #if 0
@@ -174,20 +210,21 @@ MPool *mpInit( char const *pszFile, int nLine, size_t s )
 void cudaPoolReinit( cudaPool *p )
 {
 	// Data immediately follows Pool.
-	uint8_t *pu8 = (uint8_t *)&p[1];
 	// There is one extra task for the HOST
-	for (size_t t = 0; t <= p->m_stTasks; t++) {
-		MPoolInit( (MPool *)(pu8 + t * p->m_stTaskMem), p->m_stTaskMem, t );
+	MPoolInit( getMemPool( p, 0 ), p->m_stHostMem, 0 );
+	for (size_t t = 1; t <= p->m_stTasks; t++) {
+		MPoolInit( getMemPool( p, t ), p->m_stTaskMem, t );
 	}
 }
 
-cudaPool *cudaPoolCreate( int nTasks, size_t stMem )
+cudaPool *cudaPoolCreate( int nTasks, size_t stTaskMem, size_t stHostMem )
 {
-	size_t s = stMem * (nTasks + 1) + sizeof(cudaPool);
+	size_t s = stTaskMem * nTasks + stHostMem + sizeof(cudaPool);
 	cudaPool *p;
 
 	cudaMallocManaged( &p, s, cudaMemAttachHost );
-	p->m_stTaskMem = stMem;
+	p->m_stTaskMem = stTaskMem;
+	p->m_stHostMem = stHostMem;
 	p->m_stTasks = nTasks;
 	p->m_stAlloc = s;
 
@@ -199,7 +236,7 @@ cudaPool *cudaPoolCreate( int nTasks, size_t stMem )
 // must be power of 2
 #define MEM_ALIGNMENT 8
 
-#if 1
+#if 0
 __host__ __device__ void cudaPoolFree( void *p )
 {
 }
@@ -221,13 +258,14 @@ __host__ __device__ void cudaPoolFree( void *p )
 #else
 	unsigned uTID = 0;
 #endif
-	// If the membory block doesn't belong to this task, just mark it as free...
-	// It will get cleaned up later...
-	if (pE->u8TID != uTID)  {
+	// If the current task is not the host and the membory block doesn't belong to
+	// this task, just mark it as free... It will get cleaned up later...
+	if (pE->u8TID != 0 && pE->u8TID != uTID)  {
 		pE->u8Flags = MEM_RELEASED;
 		return;
 	}
 
+	MPool *pmp = pE->pmp;
 	// The memory belongs to us, so release it and merge if possible
 	bool bMerged;
 
@@ -240,7 +278,7 @@ __host__ __device__ void cudaPoolFree( void *p )
 			__threadfence();
 			asm("trap;");
 #else
-			fprintf( stderr, "Footstone Not Valid\n" );
+			fprintf( stderr, "Headstone (next) Not Valid\n" );
 			exit(1);
 #endif
 		}
@@ -249,6 +287,7 @@ __host__ __device__ void cudaPoolFree( void *p )
 		if (pNext->u8Flags == MEM_RELEASED) {
 			pE->u32Len += pNext->u32Len;
 			vSetFootStone( pE );
+			vCheckBlock( pmp, pE, "MWNR:" );
 			bMerged = true;
 			continue;
 		}
@@ -257,18 +296,19 @@ __host__ __device__ void cudaPoolFree( void *p )
 		// Merge the two and try again.
 		if (pNext->u8Flags == MEM_FREE) {
 			pE->u32Len += pNext->u32Len;
-			vSetFootStone( pNext );
+			vSetFootStone( pE );
+			vCheckBlock( pmp, pE, "MWNF:" );
 			if (pNext->mlfree.pNext) {
 				pNext->mlfree.pNext->mlfree.pPrev = pNext->mlfree.pPrev;
 			}
 			else {
-				pE->pmp->mlfree.pTail = pNext->mlfree.pPrev;
+				pmp->mlfree.pTail = pNext->mlfree.pPrev;
 			}
 			if (pNext->mlfree.pPrev) {
 				pNext->mlfree.pPrev->mlfree.pNext = pNext->mlfree.pNext;
 			}
 			else {
-				pE->pmp->mlfree.pHead = pNext->mlfree.pNext;
+				pmp->mlfree.pHead = pNext->mlfree.pNext;
 			}
 			bMerged = true;
 			continue;
@@ -302,6 +342,7 @@ __host__ __device__ void cudaPoolFree( void *p )
 		if (pPrev->u8Flags == MEM_RELEASED) {
 			pPrev->u32Len += pE->u32Len;
 			vSetFootStone( pPrev );
+			vCheckBlock( pmp, pPrev, "MWPR:" );
 			pE = pPrev;
 			bMerged = true;
 			continue;
@@ -310,20 +351,21 @@ __host__ __device__ void cudaPoolFree( void *p )
 		// If previous block has been freed
 		// Merge the two and try again.
 		if (pPrev->u8Flags == MEM_FREE) {
-			pPrev->u32Len += pE->u32Len;
-			vSetFootStone( pPrev );
 			if (pPrev->mlfree.pNext) {
 				pPrev->mlfree.pNext->mlfree.pPrev = pPrev->mlfree.pPrev;
 			}
 			else {
-				pE->pmp->mlfree.pTail = pPrev->mlfree.pPrev;
+				pmp->mlfree.pTail = pPrev->mlfree.pPrev;
 			}
 			if (pPrev->mlfree.pPrev) {
 				pPrev->mlfree.pPrev->mlfree.pNext = pPrev->mlfree.pNext;
 			}
 			else {
-				pE->pmp->mlfree.pHead = pPrev->mlfree.pNext;
+				pmp->mlfree.pHead = pPrev->mlfree.pNext;
 			}
+			pPrev->u32Len += pE->u32Len;
+			vSetFootStone( pPrev );
+			vCheckBlock( pmp, pPrev, "MWPF:" );
 			pE = pPrev;
 			bMerged = true;
 			continue;
@@ -410,8 +452,7 @@ __host__ __device__ void *cudaPoolMalloc( cudaPool *pcp, size_t s )
 #else
 	int nTID = 0;
 #endif
-	uint8_t *pu8 = (uint8_t *)&pcp[1];
-	MPool *pmp = (MPool *)(pu8 + pcp->m_stTaskMem * nTID);
+	MPool *pmp = getMemPool( pcp, nTID );
 	return mpAlloc( pmp, s );
 }
 
@@ -425,6 +466,9 @@ __host__ __device__ void *cudaPoolCalloc( cudaPool *pcp, size_t n, size_t s)
 
 __host__ __device__ void *cudaPoolRealloc( cudaPool *pcp, void *p, size_t s)
 {
+	if (!p) {
+		return cudaPoolMalloc( pcp, s );
+	}
 	size_t sReq = (s + sizeof(MPElmnt) + sizeof(MPFootStone) + (MEM_ALIGNMENT -1)) & ~(MEM_ALIGNMENT - 1);
 
 	MPElmnt *pE = (MPElmnt *)(((uint8_t *)p) - offsetof(MPElmnt, mlfree));

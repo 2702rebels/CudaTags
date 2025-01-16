@@ -139,13 +139,7 @@ static inline __host__ __device__ int zarray_d_size(const zarray_d_t *za)
 {
     assert(za != NULL);
 
-#ifdef __CUDA_ARCH__
     return za->size;
-#else
-	zarray_d_t zat;
-	cudaMemcpy( &zat, za, sizeof(zat), cudaMemcpyDeviceToHost );
-	return zat.size;
-#endif
 }
 
 /**
@@ -180,10 +174,9 @@ static inline __host__ __device__ void zarray_d_ensure_capacity( cudaPool *pcp, 
         if (za->alloc < 8)
             za->alloc = 8;
     }
+	
 	char *nd = (char *)cudaPoolMalloc( pcp, za->alloc * za->el_sz );
-	memcpy( nd, za->data, za->size * za->el_sz );
-	cudaPoolFree( za->data );
-	za->data = nd;
+	za->data = (char *)cudaPoolRealloc( pcp, za->data, za->alloc * za->el_sz );
 }
 
 /**

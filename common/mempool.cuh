@@ -5,7 +5,7 @@ struct cudaPool;
 #ifdef __cplusplus
 extern "C" {
 #endif
-cudaPool *cudaPoolCreate( int nTasks, size_t stMem );
+cudaPool *cudaPoolCreate( int nTasks, size_t stTaskMem, size_t stHostMem );
 void vCheckPool( cudaPool *pcp, int nTask );
 void cudaPoolReinit( cudaPool *pcp );
 void cudaPoolAttachHost( cudaPool *pcp );

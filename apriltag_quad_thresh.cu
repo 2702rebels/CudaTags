@@ -1882,9 +1882,9 @@ __global__ void do_gradient_clusters_cuda(cudaPool *pcp, uint8_t const *pu8Img, 
 
 	pclusters[nCluster] = zarray_d_create(pcp, sizeof(struct cluster_hash *));
 	zarray_d_t *clusters = pclusters[nCluster];
+#if 1
     struct uint64_zarray_entry **clustermap = (uint64_zarray_entry **)cudaPoolCalloc(pcp, nclustermap, sizeof(uint64_zarray_entry *));
 
-#if 1
     int mem_chunk_size = 2048;
 	struct uint64_zarray_entry** mem_pools = (uint64_zarray_entry **)cudaPoolMalloc(pcp, sizeof(struct uint64_zarray_entry *)*(1 + 2 * nclustermap / mem_chunk_size)); // SmodeTech: avoid memory corruption when nclustermap < mem_chunk_size
     int mem_pool_idx = 0;
@@ -2033,6 +2033,7 @@ zarray_d_t* merge_clusters(cudaPool *pcp, zarray_d_t* c1, zarray_d_t* c2) {
 
 	printf( "merge_clusters( %p, %p, %p )\n", pcp, c1, c2 );
     zarray_d_t* ret = zarray_d_create(pcp, sizeof(struct cluster_hash*));
+printf( "c1 -> %d c2 -> %d\n", zarray_d_size(c1), zarray_d_size(c2) );
     zarray_d_ensure_capacity(pcp, ret, zarray_d_size(c1) + zarray_d_size(c2));
 
     int i1 = 0;
@@ -2085,12 +2086,14 @@ zarray_d_t* gradient_clusters(apriltag_detector_t *td, image_u8_t* threshim, int
     do_gradient_clusters_cuda<<<1, ntasks>>>(td->pcp, threshim->buf, ts, w, h, nclustermap, uf, clusters_list);
 	cudaPoolAttachHost( td->pcp );
 
+#if 0
 	for (int i = 0; i < ntasks; i++) {
-		printf( "cluster[%d] = %p\n", i, clusters_list[i] );
+		printf( "cluster[%d] = %d @ %p\n", i, zarray_d_size(clusters_list[i]), clusters_list[i] );
 	}
-	for (int i = 1; i <= 128; i++) {
+	for (int i = 0; i <= 128; i++) {
 		vCheckPool( td->pcp, i );
 	}
+#endif
     int length = ntasks;
     while (length > 1) {
         int write = 0;
@@ -2279,7 +2282,7 @@ zarray_t *apriltag_quad_thresh(apriltag_detector_t *td, image_u8_t *im)
 #endif
 
 
-    image_u8_destroy(threshim);
+    image_u8_destroy_cuda(threshim);
     timeprofile_stamp(td->tp, "make clusters");
 
     ////////////////////////////////////////////////////////

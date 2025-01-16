@@ -379,7 +379,7 @@ apriltag_detector_t *apriltag_detector_create()
 
     td->debug = false;
 
-	td->pcp = cudaPoolCreate( APRILTAG_MAX_CUDA_THREADS, APRILTAG_CUDA_MEMPOOL_SIZE );
+	td->pcp = cudaPoolCreate( APRILTAG_MAX_CUDA_THREADS, APRILTAG_CUDA_MEMPOOL_SIZE, 8 * 1024 * 1024 );
     // NB: defer initialization of td->wp so that the user can
     // override td->nthreads.
 
@@ -1104,9 +1104,12 @@ zarray_t *apriltag_detector_detect(apriltag_detector_t *td, image_u8_t *im_orig)
     }
 
     timeprofile_stamp(td->tp, "blur/sharp");
-#if 0
-    if (td->debug)
+#if 1
+    if (td->debug) {
+		cudaPoolAttachHost(td->pcp );
         image_u8_write_pnm(quad_im, "debug_preprocess.pnm");
+		cudaPoolAttachGlobal( td->pcp );
+	}
 #endif
     zarray_t *quads = apriltag_quad_thresh(td, quad_im);
 
@@ -1125,7 +1128,7 @@ zarray_t *apriltag_detector_detect(apriltag_detector_t *td, image_u8_t *im_orig)
     }
 
     if (quad_im != im_orig)
-        image_u8_destroy(quad_im);
+        image_u8_destroy_cuda(quad_im);
 
     zarray_t *detections = zarray_create(sizeof(apriltag_detection_t*));
 
@@ -1133,8 +1136,9 @@ zarray_t *apriltag_detector_detect(apriltag_detector_t *td, image_u8_t *im_orig)
 
     timeprofile_stamp(td->tp, "quads");
 
-#if 0
+#if 1
     if (td->debug) {
+		cudaPoolAttachHost(td->pcp );
         image_u8_t *im_quads = image_u8_copy(im_orig);
         image_u8_darken(im_quads);
         image_u8_darken(im_quads);
