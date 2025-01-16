@@ -50,8 +50,8 @@ int main( int argc, char **argv )
 		}
 	}
 
-    apriltag_family_t *tf = tag36h11_create();
     apriltag_detector_t *td = apriltag_detector_create();
+    apriltag_family_t *tf = tag36h11_create(td->pcp);
     apriltag_detector_add_family_bits(td, tf, 2);
 
 	td->quad_decimate = 2;
