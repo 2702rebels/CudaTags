@@ -379,6 +379,7 @@ apriltag_detector_t *apriltag_detector_create()
 
     td->debug = false;
 
+	td->pcp = cudaPoolCreate( APRILTAG_MAX_CUDA_THREADS, APRILTAG_CUDA_MEMPOOL_SIZE );
     // NB: defer initialization of td->wp so that the user can
     // override td->nthreads.
 
@@ -1052,7 +1053,7 @@ zarray_t *apriltag_detector_detect(apriltag_detector_t *td, image_u8_t *im_orig)
     // and blurring parameters.
     image_u8_t *quad_im = im_orig;
     if (td->quad_decimate > 1) {
-        quad_im = image_u8_decimate(im_orig, td->quad_decimate);
+        quad_im = image_u8_decimate_cuda(td->pcp, im_orig, td->quad_decimate, td->nthreads);
 
         timeprofile_stamp(td->tp, "decimate");
     }
@@ -1077,11 +1078,11 @@ zarray_t *apriltag_detector_detect(apriltag_detector_t *td, image_u8_t *im_orig)
 
             if (td->quad_sigma > 0) {
                 // Apply a blur
-                image_u8_gaussian_blur(quad_im, sigma, ksz);
+                image_u8_gaussian_blur_cuda(quad_im, sigma, ksz, td->nthreads);
             } else {
                 // SHARPEN the image by subtracting the low frequency components.
-                image_u8_t *orig = image_u8_copy(quad_im);
-                image_u8_gaussian_blur(quad_im, sigma, ksz);
+                image_u8_t *orig = image_u8_copy_cuda(td->pcp, quad_im);
+                image_u8_gaussian_blur_cuda(quad_im, sigma, ksz, td->nthreads);
 
                 for (int y = 0; y < orig->height; y++) {
                     for (int x = 0; x < orig->width; x++) {
@@ -1097,16 +1098,16 @@ zarray_t *apriltag_detector_detect(apriltag_detector_t *td, image_u8_t *im_orig)
                         quad_im->buf[y*quad_im->stride + x] = (uint8_t) v;
                     }
                 }
-                image_u8_destroy(orig);
+                image_u8_destroy_cuda(orig);
             }
         }
     }
 
     timeprofile_stamp(td->tp, "blur/sharp");
-
+#if 0
     if (td->debug)
         image_u8_write_pnm(quad_im, "debug_preprocess.pnm");
-
+#endif
     zarray_t *quads = apriltag_quad_thresh(td, quad_im);
 
     // adjust centers of pixels so that they correspond to the
@@ -1132,6 +1133,7 @@ zarray_t *apriltag_detector_detect(apriltag_detector_t *td, image_u8_t *im_orig)
 
     timeprofile_stamp(td->tp, "quads");
 
+#if 0
     if (td->debug) {
         image_u8_t *im_quads = image_u8_copy(im_orig);
         image_u8_darken(im_quads);
@@ -1155,6 +1157,7 @@ zarray_t *apriltag_detector_detect(apriltag_detector_t *td, image_u8_t *im_orig)
         image_u8_write_pnm(im_quads, "debug_quads_raw.pnm");
         image_u8_destroy(im_quads);
     }
+#endif
 
     ////////////////////////////////////////////////////////////////
     // Step 2. Decode tags from each quad.

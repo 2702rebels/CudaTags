@@ -31,6 +31,8 @@ either expressed or implied, of the Regents of The University of Michigan.
 #include <stdint.h>
 #include <stdlib.h>
 
+#include "common/mempool.cuh"
+
 typedef struct unionfind unionfind_t;
 
 struct unionfind
@@ -44,21 +46,23 @@ struct unionfind
     uint32_t *size;
 };
 
-static inline unionfind_t *unionfind_create(uint32_t maxid)
+static inline __host__ __device__ unionfind_t *unionfind_create(cudaPool *pcp, uint32_t maxid)
 {
-    unionfind_t *uf = (unionfind_t*) calloc(1, sizeof(unionfind_t));
-    uf->maxid = maxid;
-    uf->parent = (uint32_t *) malloc((maxid+1) * sizeof(uint32_t) * 2);
-    memset(uf->parent, 0xff, (maxid+1) * sizeof(uint32_t));
+    unionfind_t *uf = (unionfind_t *)cudaPoolCalloc( pcp, 1, sizeof(unionfind_t) );
+	uf->maxid = maxid;
+
+	uf->parent = (uint32_t *)cudaPoolMalloc(pcp, (maxid+1) * sizeof(uint32_t) * 2);
+	memset(uf->parent, 0xff, (maxid+1) * sizeof(uint32_t));
     uf->size = uf->parent + (maxid+1);
     memset(uf->size, 0, (maxid+1) * sizeof(uint32_t));
+
     return uf;
 }
 
-static inline void unionfind_destroy(unionfind_t *uf)
+static inline __host__ __device__ void unionfind_destroy(cudaPool *pcp, unionfind_t *uf)
 {
-    free(uf->parent);
-    free(uf);
+	cudaPoolFree(uf->parent);
+	cudaPoolFree(uf);
 }
 
 /*
@@ -80,7 +84,7 @@ static inline uint32_t unionfind_get_representative(unionfind_t *uf, uint32_t id
 
 // this one seems to be every-so-slightly faster than the recursive
 // version above.
-static inline uint32_t unionfind_get_representative(unionfind_t *uf, uint32_t id)
+static inline __host__ __device__ uint32_t unionfind_get_representative(unionfind_t *uf, uint32_t id)
 {
     uint32_t root = uf->parent[id];
     // unititialized node, so set to self
@@ -104,13 +108,13 @@ static inline uint32_t unionfind_get_representative(unionfind_t *uf, uint32_t id
     return root;
 }
 
-static inline uint32_t unionfind_get_set_size(unionfind_t *uf, uint32_t id)
+static inline __host__ __device__ uint32_t unionfind_get_set_size(unionfind_t *uf, uint32_t id)
 {
     uint32_t repid = unionfind_get_representative(uf, id);
     return uf->size[repid] + 1;
 }
 
-static inline uint32_t unionfind_connect(unionfind_t *uf, uint32_t aid, uint32_t bid)
+static inline __host__ __device__ uint32_t unionfind_connect(unionfind_t *uf, uint32_t aid, uint32_t bid)
 {
     uint32_t aroot = unionfind_get_representative(uf, aid);
     uint32_t broot = unionfind_get_representative(uf, bid);

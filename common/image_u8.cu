@@ -31,9 +31,12 @@ either expressed or implied, of the Regents of The University of Michigan.
 #include <string.h>
 #include <math.h>
 
+#include <cuda_runtime.h>
+
 #include "common/image_u8.cuh"
 #include "common/pnm.cuh"
 #include "common/math_util.cuh"
+#include "common/mempool.cuh"
 
 // least common multiple of 64 (sandy bridge cache line) and 24 (stride
 // needed for RGB in 8-wide vector processing)
@@ -49,6 +52,11 @@ image_u8_t *image_u8_create_stride(unsigned int width, unsigned int height, unsi
     image_u8_t *im = (image_u8_t *)calloc(1, sizeof(image_u8_t));
     memcpy(im, &tmp, sizeof(image_u8_t));
     return im;
+}
+
+image_u8_t *image_u8_create_cuda(cudaPool *pcp, unsigned int width, unsigned int height)
+{
+    return image_u8_create_alignment_cuda(pcp, width, height, DEFAULT_ALIGNMENT_U8);
 }
 
 image_u8_t *image_u8_create(unsigned int width, unsigned int height)
@@ -79,6 +87,20 @@ image_u8_t *image_u8_copy(const image_u8_t *in)
     return copy;
 }
 
+image_u8_t *image_u8_copy_cuda(cudaPool *pcp, const image_u8_t *in )
+{
+	uint8_t *buf = (uint8_t *)cudaPoolMalloc( pcp, in->height * in->stride );
+
+    memcpy(buf, in->buf, in->height*in->stride*sizeof(uint8_t));
+
+    // const initializer
+    image_u8_t tmp = { .width = in->width, .height = in->height, .stride = in->stride, .buf = buf };
+
+    image_u8_t *copy = (image_u8_t *)cudaPoolCalloc(pcp, 1, sizeof(image_u8_t));
+    memcpy(copy, &tmp, sizeof(image_u8_t));
+    return copy;
+}
+
 void image_u8_destroy(image_u8_t *im)
 {
     if (!im)
@@ -86,6 +108,15 @@ void image_u8_destroy(image_u8_t *im)
 
     free(im->buf);
     free(im);
+}
+
+void image_u8_destroy_cuda(image_u8_t *im)
+{
+    if (!im)
+        return;
+
+    cudaPoolFree(im->buf);
+    cudaPoolFree(im);
 }
 
 ////////////////////////////////////////////////////////////
@@ -317,36 +348,89 @@ static void convolve(const uint8_t *x, uint8_t *y, int sz, const uint8_t *k, int
         y[i] = x[i];
 }
 
+static __device__ void convolve_d(const uint8_t *x, uint8_t *y, int sz, const uint8_t *k, int ksz)
+{
+    assert((ksz&1)==1);
+
+    for (int i = 0; i < ksz/2 && i < sz; i++)
+        y[i] = x[i];
+
+    for (int i = 0; i < sz - ksz; i++) {
+        uint32_t acc = 0;
+
+        for (int j = 0; j < ksz; j++)
+            acc += k[j]*x[i+j];
+
+        y[ksz/2 + i] = acc >> 8;
+    }
+
+    for (int i = sz - ksz + ksz/2; i < sz; i++)
+        y[i] = x[i];
+}
+
+static __global__ void convolve_cuda_row( uint8_t *pu8ImgBuf, int height, int width, int stride, uint8_t const *pK, int ksz )
+{
+	int y = blockDim.x * blockIdx.x + threadIdx.x;
+	if (y >= height) {
+		return;
+	}
+	uint8_t x[MAX_IMAGE_U8_WIDTH];
+//	cudaMemcpy( x, &pu8ImgBuf[y * stride], width, cudaMemcpyDeviceToDevice );
+	memcpy( x, &pu8ImgBuf[y * stride], width );
+	convolve_d( x, &pu8ImgBuf[y * stride], width, pK, ksz );
+}
+
+static __global__ void convolve_cuda_col( uint8_t *pu8ImgBuf, int height, int width, int stride, uint8_t const *pK, int ksz )
+{
+	int x = blockDim.x * blockIdx.x + threadIdx.x;
+	if (x >= width) {
+		return;
+	}
+	uint8_t xb[MAX_IMAGE_U8_HEIGHT];
+	uint8_t yb[MAX_IMAGE_U8_HEIGHT];
+	for (int y = 0; y < height; y++)
+		xb[y] = pu8ImgBuf[y * stride + x];
+
+	convolve_d( xb, yb, height, pK, ksz );
+
+	for (int y = 0; y < height; y++)
+		pu8ImgBuf[y * stride + x] = yb[y];
+}
+
+void image_u8_convolve_2D_cuda(image_u8_t *im, const uint8_t *k, int ksz, int nthreads)
+{
+    assert((ksz & 1) == 1); // ksz must be odd.
+
+	convolve_cuda_row<<<im->height / nthreads + 1, nthreads>>>(im->buf, im->height, im->width, im->stride, k, ksz );
+	convolve_cuda_col<<<im->width / nthreads + 1, nthreads>>>(im->buf, im->height, im->width, im->stride, k, ksz );
+}
+
 void image_u8_convolve_2D(image_u8_t *im, const uint8_t *k, int ksz)
 {
     assert((ksz & 1) == 1); // ksz must be odd.
 
     for (int y = 0; y < im->height; y++) {
-
-        uint8_t *x = (uint8_t *)malloc(sizeof(uint8_t)*im->stride);
+        uint8_t x[im->stride];
         memcpy(x, &im->buf[y*im->stride], im->stride);
 
         convolve(x, &im->buf[y*im->stride], im->width, k, ksz);
-        free(x);
     }
 
     for (int x = 0; x < im->width; x++) {
-        uint8_t *xb = (uint8_t *)malloc(sizeof(uint8_t)*im->height);
-        uint8_t *yb = (uint8_t *)malloc(sizeof(uint8_t)*im->height);
+        uint8_t xb[im->height];
+        uint8_t yb[im->height];
 
         for (int y = 0; y < im->height; y++)
             xb[y] = im->buf[y*im->stride + x];
 
         convolve(xb, yb, im->height, k, ksz);
-        free(xb);
 
         for (int y = 0; y < im->height; y++)
             im->buf[y*im->stride + x] = yb[y];
-        free(yb);
     }
 }
 
-void image_u8_gaussian_blur(image_u8_t *im, double sigma, int ksz)
+void image_u8_gaussian_blur_cuda(image_u8_t *im, double sigma, int ksz, int nthreads)
 {
     if (sigma == 0)
         return;
@@ -354,7 +438,7 @@ void image_u8_gaussian_blur(image_u8_t *im, double sigma, int ksz)
     assert((ksz & 1) == 1); // ksz must be odd.
 
     // build the kernel.
-    double *dk = (double *)malloc(sizeof(double)*ksz);
+    double dk[ksz];
 
     // for kernel of length 5:
     // dk[0] = f(-2), dk[1] = f(-1), dk[2] = f(0), dk[3] = f(1), dk[4] = f(2)
@@ -372,18 +456,54 @@ void image_u8_gaussian_blur(image_u8_t *im, double sigma, int ksz)
     for (int i = 0; i < ksz; i++)
         dk[i] /= acc;
 
-    uint8_t *k = (uint8_t *)malloc(sizeof(uint8_t)*ksz);
+    uint8_t k[ksz];
     for (int i = 0; i < ksz; i++)
         k[i] = dk[i]*255;
 
+	uint8_t *pK;
+	cudaMalloc( &pK, sizeof(k) );
+	cudaMemcpy( pK, k, sizeof(k), cudaMemcpyHostToDevice );
+	
     if (0) {
         for (int i = 0; i < ksz; i++)
             printf("%d %15f %5d\n", i, dk[i], k[i]);
     }
-    free(dk);
+
+    image_u8_convolve_2D_cuda(im, pK, ksz, nthreads);
+	cudaFree( pK );
+}
+
+void image_u8_gaussian_blur(image_u8_t *im, double sigma, int ksz)
+{
+    if (sigma == 0)
+        return;
+
+    assert((ksz & 1) == 1); // ksz must be odd.
+
+    // build the kernel.
+    double dk[ksz];
+
+    // for kernel of length 5:
+    // dk[0] = f(-2), dk[1] = f(-1), dk[2] = f(0), dk[3] = f(1), dk[4] = f(2)
+    for (int i = 0; i < ksz; i++) {
+        int x = -ksz/2 + i;
+        double v = exp(-.5*sq(x / sigma));
+        dk[i] = v;
+    }
+
+    // normalize
+    double acc = 0;
+    for (int i = 0; i < ksz; i++)
+        acc += dk[i];
+
+    for (int i = 0; i < ksz; i++)
+        dk[i] /= acc;
+
+	uint8_t k[ksz];
+    for (int i = 0; i < ksz; i++)
+        k[i] = dk[i]*255;
 
     image_u8_convolve_2D(im, k, ksz);
-    free(k);
 }
 
 image_u8_t *image_u8_rotate(const image_u8_t *in, double rad, uint8_t pad)
@@ -434,6 +554,65 @@ image_u8_t *image_u8_rotate(const image_u8_t *in, double rad, uint8_t pad)
     }
 
     return out;
+}
+
+image_u8_t *image_u8_create_alignment_cuda(cudaPool *pcp, unsigned int width, unsigned int height, unsigned int alignment)
+{
+    int stride = width;
+
+    if ((stride % alignment) != 0)
+        stride += alignment - (stride % alignment);
+
+    return image_u8_create_stride_cuda(pcp, width, height, stride);
+}
+
+image_u8_t *image_u8_create_stride_cuda(cudaPool *pcp, unsigned int width, unsigned int height, unsigned int stride)
+{
+    uint8_t *buf = (uint8_t *)cudaPoolMalloc( pcp, height * stride );
+
+    // const initializer
+    image_u8_t tmp = { .width = (int)width, .height = (int)height, .stride = (int)stride, .buf = buf };
+
+    image_u8_t *im = (image_u8_t *)cudaPoolMalloc( pcp, sizeof(image_u8_t) );
+	memcpy( im, &tmp, sizeof(image_u8_t) );
+    return im;
+}
+
+static __global__ void decimateBlock( uint8_t *dst, uint8_t const *src, int ds, int sh, int sw, int ss, int factor )
+{
+	int y = blockDim.x * blockIdx.x + threadIdx.x;
+
+	int dw = 1 + (sw - 1) / factor;
+	int dh = 1 + (sh - 1) / factor;
+
+	if (y >= dh)
+		return;
+
+	uint8_t *dstbuf = &dst[y * ds];
+	uint8_t const *srcbuf = &src[y * factor * ss];
+
+	for (int sx = 0; sx < dw; sx++) {
+		dstbuf[sx] = srcbuf[sx * factor];
+	}
+}
+
+image_u8_t *image_u8_decimate_cuda(cudaPool *pcp, image_u8_t *im, float ffactor, int nthreads)
+{
+    int width = im->width;
+	int height = im->height;
+
+    int factor = (int) ffactor;
+
+    int swidth = 1 + (width - 1)/factor;
+    int sheight = 1 + (height - 1)/factor;
+
+	cudaPoolAttachHost( pcp );
+    image_u8_t *decim = image_u8_create_cuda(pcp, swidth, sheight);
+
+	cudaPoolAttachGlobal( pcp );
+	decimateBlock<<<sheight/nthreads + 1, nthreads>>>(decim->buf, im->buf, decim->stride, im->height, im->width, im->stride, factor);
+
+    return decim;
 }
 
 image_u8_t *image_u8_decimate(image_u8_t *im, float ffactor)
@@ -491,6 +670,7 @@ image_u8_t *image_u8_decimate(image_u8_t *im, float ffactor)
     int swidth = 1 + (width - 1)/factor;
     int sheight = 1 + (height - 1)/factor;
     image_u8_t *decim = image_u8_create(swidth, sheight);
+
     int sy = 0;
     for (int y = 0; y < height; y += factor) {
         int sx = 0;

@@ -25,20 +25,33 @@ of the authors and should not be interpreted as representing official policies,
 either expressed or implied, of the Regents of The University of Michigan.
 */
 
-#ifndef _TAG36H11
-#define _TAG36H11
+#include <string.h>
+#include <assert.h>
+#include <cuda_runtime.h>
 
-#include "apriltag.cuh"
+//#include "zarray_d.cuh"
+#if 0
+int zstrcmp(const void * a_pp, const void * b_pp)
+{
+    assert(a_pp != NULL);
+    assert(b_pp != NULL);
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+    char * a = *(char**)a_pp;
+    char * b = *(char**)b_pp;
 
-apriltag_family_t *tag36h11_create(cudaPool *pcp);
-void tag36h11_destroy(apriltag_family_t *tf);
-
-#ifdef __cplusplus
+    return strcmp(a,b);
 }
-#endif
 
+void zarray_vmap(zarray_t *za, void (*f)(void*))
+{
+    assert(za != NULL);
+    assert(f != NULL);
+    assert(za->el_sz == sizeof(void*));
+
+    for (int idx = 0; idx < za->size; idx++) {
+        void *pp = &za->data[idx*za->el_sz];
+        void *p = *(void**) pp;
+        f(p);
+    }
+}
 #endif

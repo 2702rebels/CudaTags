@@ -26,6 +26,7 @@ either expressed or implied, of the Regents of The University of Michigan.
 */
 
 #include <stdlib.h>
+#include "common/mempool.cuh"
 #include "tag36h11.cuh"
 
 static uint64_t codedata[587] = {
@@ -617,16 +618,19 @@ static uint64_t codedata[587] = {
    0x00000002164f73a0UL,
    0x0000000e8b772fe0UL,
 };
-apriltag_family_t *tag36h11_create()
+apriltag_family_t *tag36h11_create(cudaPool *pcp)
 {
-   apriltag_family_t *tf = (apriltag_family_t *)calloc(1, sizeof(apriltag_family_t));
-   tf->name = strdup("tag36h11");
+   char const *pszFamily = "tag36h11";
+
+   apriltag_family_t *tf = (apriltag_family_t *)cudaPoolCalloc(pcp, 1, sizeof(apriltag_family_t));
+   tf->name = (char *)cudaPoolMalloc(pcp, strlen(pszFamily) + 1);
+   strcpy( tf->name, pszFamily );
    tf->h = 11;
    tf->ncodes = 587;
    tf->codes = codedata;
    tf->nbits = 36;
-   tf->bit_x = (uint32_t *)calloc(36, sizeof(uint32_t));
-   tf->bit_y = (uint32_t *)calloc(36, sizeof(uint32_t));
+   tf->bit_x = (uint32_t *)cudaPoolCalloc(pcp, 36, sizeof(uint32_t));
+   tf->bit_y = (uint32_t *)cudaPoolCalloc(pcp, 36, sizeof(uint32_t));
    tf->bit_x[0] = 1;
    tf->bit_y[0] = 1;
    tf->bit_x[1] = 2;
@@ -707,8 +711,8 @@ apriltag_family_t *tag36h11_create()
 
 void tag36h11_destroy(apriltag_family_t *tf)
 {
-   free(tf->bit_x);
-   free(tf->bit_y);
-   free(tf->name);
-   free(tf);
+   cudaPoolFree(tf->bit_x);
+   cudaPoolFree(tf->bit_y);
+   cudaPoolFree(tf->name);
+   cudaPoolFree(tf);
 }

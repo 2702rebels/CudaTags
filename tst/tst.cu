@@ -26,12 +26,17 @@ using namespace cv;
 
 int main( int argc, char **argv )
 {
+	std::string st( "/data/terry/r00056.png" );
 	if (argc !=2) {
+#if 0
 		printf( "Usage: %s input.png\n", argv[0] );
 		return 1;
+#else
+#endif
 	}
-	std::string st( argv[1] );
-
+	else {
+		st = argv[1];
+	}
 	Mat mIn = cv::imread( st, IMREAD_COLOR ); 
 	Mat m( mIn.rows, mIn.cols, CV_8UC1 );
 
@@ -50,12 +55,14 @@ int main( int argc, char **argv )
     apriltag_detector_add_family_bits(td, tf, 2);
 
 	td->quad_decimate = 2;
-	td->nthreads = 4;
+	td->nthreads = 1;
+	td->debug = 1;
 	image_u8_t *pim = image_u8_create_stride( m.cols, m.rows, m.cols );
 	pim->buf = m.ptr();
 
+	image_u8_t *pcuda = image_u8_copy_cuda( td->pcp, pim );
 	for (int i = 0; i < 1000; i++) {
-		zarray_t *detections = apriltag_detector_detect(td, pim);
+		zarray_t *detections = apriltag_detector_detect(td, pcuda);
 		zarray_destroy( detections );
 	}
 //	printf( "Detected %d\n", detections->size );

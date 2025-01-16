@@ -33,6 +33,7 @@ extern "C" {
 
 #include <stdlib.h>
 
+#include "common/mempool.cuh"
 #include "common/matd.cuh"
 #include "common/image_u8.cuh"
 #include "common/zarray.cuh"
@@ -40,7 +41,11 @@ extern "C" {
 #include "common/timeprofile.cuh"
 #include "common/pthreads_cross.cuh"
 
-#define APRILTAG_TASKS_PER_THREAD_TARGET 10
+#define APRILTAG_TASKS_PER_THREAD_TARGET 6
+
+// Todo:  make these configurable
+#define APRILTAG_MAX_CUDA_THREADS	128
+#define APRILTAG_CUDA_MEMPOOL_SIZE	1024*1024*2
 
 struct quad
 {
@@ -188,6 +193,9 @@ struct apriltag_detector
 
     // Used for thread safety.
     pthread_mutex_t mutex;
+
+	// memory pool for Cuda Threads
+	cudaPool *pcp;
 };
 
 // Represents the detection of a tag. These are returned to the user

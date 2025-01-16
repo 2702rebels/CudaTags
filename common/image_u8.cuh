@@ -34,6 +34,10 @@ either expressed or implied, of the Regents of The University of Michigan.
 extern "C" {
 #endif
 
+#define MAX_IMAGE_U8_WIDTH	2048
+#define MAX_IMAGE_U8_HEIGHT 2048
+struct cudaPool;
+
 typedef struct image_u8_lut image_u8_lut_t;
 struct image_u8_lut
 {
@@ -51,14 +55,18 @@ struct image_u8_lut
 // Create or load an image. returns NULL on failure. Uses default
 // stride alignment.
 image_u8_t *image_u8_create_stride(unsigned int width, unsigned int height, unsigned int stride);
+image_u8_t *image_u8_create_stride_cuda(cudaPool *pcp, unsigned int width, unsigned int height, unsigned int stride);
 image_u8_t *image_u8_create(unsigned int width, unsigned int height);
+image_u8_t *image_u8_create_cuda(cudaPool *pcp, unsigned int width, unsigned int height);
 image_u8_t *image_u8_create_alignment(unsigned int width, unsigned int height, unsigned int alignment);
+image_u8_t *image_u8_create_alignment_cuda(cudaPool *pcp, unsigned int width, unsigned int height, unsigned int alignment);
 image_u8_t *image_u8_create_from_f32(image_f32_t *fim);
 
 image_u8_t *image_u8_create_from_pnm(const char *path);
     image_u8_t *image_u8_create_from_pnm_alignment(const char *path, int alignment);
 
 image_u8_t *image_u8_copy(const image_u8_t *in);
+image_u8_t *image_u8_copy_cuda(cudaPool *pcp, const image_u8_t *in );
 void image_u8_draw_line(image_u8_t *im, float x0, float y0, float x1, float y1, int v, int width);
 void image_u8_draw_circle(image_u8_t *im, float x0, float y0, float r, int v);
 void image_u8_draw_annulus(image_u8_t *im, float x0, float y0, float r0, float r1, int v);
@@ -68,12 +76,17 @@ void image_u8_fill_line_max(image_u8_t *im, const image_u8_lut_t *lut, const flo
 void image_u8_clear(image_u8_t *im);
 void image_u8_darken(image_u8_t *im);
 void image_u8_convolve_2D(image_u8_t *im, const uint8_t *k, int ksz);
+void image_u8_convolve_2D_cuda(image_u8_t *im, const uint8_t *k, int ksz, int nthreads);
 void image_u8_gaussian_blur(image_u8_t *im, double sigma, int k);
+void image_u8_gaussian_blur_cuda(image_u8_t *im, double sigma, int k, int nthreads);
 
 // 1.5, 2, 3, 4, ... supported
 image_u8_t *image_u8_decimate(image_u8_t *im, float factor);
+// 2, 3, 4, ... supported
+image_u8_t *image_u8_decimate_cuda(cudaPool *pcp, image_u8_t *im, float ffactor, int nthreads);
 
 void image_u8_destroy(image_u8_t *im);
+void image_u8_destroy_cuda(image_u8_t *im);
 
 // Write a pnm. Returns 0 on success
 // Currently only supports GRAY and RGBA. Does not write out alpha for RGBA
