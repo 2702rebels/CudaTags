@@ -60,7 +60,7 @@ struct zarray_d
  * the specified size. It is the caller's responsibility to call zarray_destroy()
  * on the returned array when it is no longer needed.
  */
-__host__ __device__ zarray_d_t *zarray_d_create(cudaPool *pcp, size_t el_sz)
+static __host__ __device__ zarray_d_t *zarray_d_create(cudaPool *pcp, size_t el_sz)
 {
 //    assert(el_sz > 0);
 
@@ -79,7 +79,9 @@ static inline __host__ __device__ void zarray_d_destroy(cudaPool *pcp, zarray_d_
     if (za == NULL)
         return;
 
-	cudaPoolFree( za->data );
+	if (za->data) {
+		cudaPoolFree( za->data );
+	}
 	cudaPoolFree( za );
 }
 

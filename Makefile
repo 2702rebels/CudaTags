@@ -15,7 +15,7 @@ OBJS=apriltag.o apriltag_quad_thresh.o tag36h11.o
 all: common $(OBJS)
 
 apriltag.o: apriltag.cu apriltag.cuh common/mempool.cuh common/mempool.cu
-apriltag_quad_thresh.o: apriltag_quad_thresh.cu apriltag.cuh common/mempool.cuh common/mempool.cu
+apriltag_quad_thresh.o: apriltag_quad_thresh.cu apriltag.cuh common/mempool.cuh common/mempool.cu common/zarray_d.cuh
 
 common:
 	make -C common

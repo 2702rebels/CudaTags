@@ -1,5 +1,5 @@
 #OBJS=cudamalloc.o g2d.o image_u8.o image_u8x3.o matd.o pnm.o svd22.o time_util.o workerpool.o zarray.o zmaxheap.o
-OBJS=g2d.o image_u8.o image_u8x3.o matd.o pnm.o svd22.o time_util.o workerpool.o zarray.o zarray_d.o zmaxheap.o mempool.o
+OBJS=g2d.o image_u8.o image_u8x3.o matd.o pnm.o svd22.o time_util.o workerpool.o zarray.o zmaxheap.o mempool.o zarray_d.o
 
 .SUFFIXES: .cu
 

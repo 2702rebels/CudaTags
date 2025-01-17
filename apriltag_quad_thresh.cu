@@ -52,6 +52,8 @@ either expressed or implied, of the Regents of The University of Michigan.
 #include "common/postscript_utils.cuh"
 #include "common/math_util.cuh"
 
+#include "common/qsort.cu"
+
 #ifdef _WIN32
 static inline long int random(void)
 {
@@ -180,7 +182,7 @@ struct cluster_hash
 //
 // fit a line to the points [i0, i1] (inclusive). i0, i1 are both [0,
 // sz) if i1 < i0, we treat this as a wrap around.
-void fit_line(struct line_fit_pt *lfps, int sz, int i0, int i1, double *lineparm, double *err, double *mse)
+__device__ void fit_line(struct line_fit_pt *lfps, int sz, int i0, int i1, double *lineparm, double *err, double *mse)
 {
     assert(i0 != i1);
     assert(i0 >= 0 && i1 >= 0 && i0 < sz && i1 < sz);
@@ -300,11 +302,11 @@ void fit_line(struct line_fit_pt *lfps, int sz, int i0, int i1, double *lineparm
         *mse = eig_small;
 }
 
-float pt_compare_angle(struct pt *a, struct pt *b) {
+__device__ float pt_compare_angle(struct pt *a, struct pt *b) {
     return a->slope - b->slope;
 }
 
-int err_compare_descending(const void *_a, const void *_b)
+int __device__ err_compare_descending(const void *_a, const void *_b)
 {
     const double *a =  (const double *)_a;
     const double *b =  (const double *)_b;
@@ -328,9 +330,9 @@ int err_compare_descending(const void *_a, const void *_b)
   rather than pairs of clusters.) Critically, this helps keep nearby
   edges from becoming connected.
 */
-int quad_segment_maxima(apriltag_detector_t *td, zarray_t *cluster, struct line_fit_pt *lfps, int indices[4])
+__device__ int quad_segment_maxima(cudaPool *pcp, struct apriltag_quad_thresh_params *pqtp, zarray_d_t *cluster, struct line_fit_pt *lfps, int indices[4])
 {
-    int sz = zarray_size(cluster);
+    int sz = zarray_d_size(cluster);
 
     // ksz: when fitting points, how many points on either side do we consider?
     // (actual "kernel" width is 2ksz).
@@ -343,13 +345,13 @@ int quad_segment_maxima(apriltag_detector_t *td, zarray_t *cluster, struct line_
 
     // XXX Tunable. Maybe make a multiple of JPEG block size to increase robustness
     // to JPEG compression artifacts?
-    int ksz = imin(20, sz / 12);
+    int ksz = imin_d(20, sz / 12);
 
     // can't fit a quad if there are too few points.
     if (ksz < 2)
         return 0;
 
-    double errs[sz];
+    double *errs = (double *)cudaPoolMalloc( pcp, sz * sizeof(double) );
 
     for (int i = 0; i < sz; i++) {
         fit_line(lfps, sz, (i + sz - ksz) % sz, (i + ksz) % sz, NULL, &errs[i], NULL);
@@ -357,7 +359,7 @@ int quad_segment_maxima(apriltag_detector_t *td, zarray_t *cluster, struct line_
 
     // apply a low-pass filter to errs
     if (1) {
-        double y[sz];
+        double *y = (double *)cudaPoolMalloc( pcp, sz * sizeof(double) );
 
         // how much filter to apply?
 
@@ -379,7 +381,7 @@ int quad_segment_maxima(apriltag_detector_t *td, zarray_t *cluster, struct line_
 
         // For default values of cutoff = 0.05, sigma = 3,
         // we have fsz = 17.
-        float f[fsz];
+        float *f = (float *)cudaPoolMalloc( pcp, sizeof(float) * fsz );
 
         for (int i = 0; i < fsz; i++) {
             int j = i - fsz / 2;
@@ -396,10 +398,12 @@ int quad_segment_maxima(apriltag_detector_t *td, zarray_t *cluster, struct line_
         }
 
         memcpy(errs, y, sizeof(double)*sz);
+		cudaPoolFree(y);
+		cudaPoolFree(f);
     }
 
-    int maxima[sz];
-    double maxima_errs[sz];
+    int *maxima = (int *)cudaPoolMalloc( pcp, sizeof(int) * sz );
+    double *maxima_errs = (double *)cudaPoolMalloc( pcp, sizeof(double) * sz );
     int nmaxima = 0;
 
     for (int i = 0; i < sz; i++) {
@@ -410,22 +414,24 @@ int quad_segment_maxima(apriltag_detector_t *td, zarray_t *cluster, struct line_
         }
     }
 
+	cudaPoolFree( errs );
+
     // if we didn't get at least 4 maxima, we can't fit a quad.
     if (nmaxima < 4){
-        free(maxima);
-        free(maxima_errs);
+        cudaPoolFree(maxima);
+        cudaPoolFree(maxima_errs);
         return 0;
     }
 
     // select only the best maxima if we have too many
-    int max_nmaxima = td->qtp.max_nmaxima;
+    int max_nmaxima = pqtp->max_nmaxima;
 
     if (nmaxima > max_nmaxima) {
-        double maxima_errs_copy[nmaxima];
+        double *maxima_errs_copy = (double *)cudaPoolMalloc( pcp, sizeof(double) * nmaxima);
         memcpy(maxima_errs_copy, maxima_errs, sizeof(double)*nmaxima);
 
         // throw out all but the best handful of maxima. Sorts descending.
-        qsort(maxima_errs_copy, nmaxima, sizeof(double), err_compare_descending);
+        qsort_d(maxima_errs_copy, nmaxima, sizeof(double), err_compare_descending);
 
         double maxima_thresh = maxima_errs_copy[max_nmaxima];
         int out = 0;
@@ -435,7 +441,9 @@ int quad_segment_maxima(apriltag_detector_t *td, zarray_t *cluster, struct line_
             maxima[out++] = maxima[in];
         }
         nmaxima = out;
+		cudaPoolFree(maxima_errs_copy);
     }
+	cudaPoolFree(maxima_errs);
 
     int best_indices[4];
     double best_error = HUGE_VALF;
@@ -445,7 +453,7 @@ int quad_segment_maxima(apriltag_detector_t *td, zarray_t *cluster, struct line_
     double params01[4], params12[4];
 
     // disallow quads where the angle is less than a critical value.
-    double max_dot = td->qtp.cos_critical_rad; //25*M_PI/180);
+    double max_dot = pqtp->cos_critical_rad; //25*M_PI/180);
 
     for (int m0 = 0; m0 < nmaxima - 3; m0++) {
         int i0 = maxima[m0];
@@ -455,14 +463,14 @@ int quad_segment_maxima(apriltag_detector_t *td, zarray_t *cluster, struct line_
 
             fit_line(lfps, sz, i0, i1, params01, &err01, &mse01);
 
-            if (mse01 > td->qtp.max_line_fit_mse)
+            if (mse01 > pqtp->max_line_fit_mse)
                 continue;
 
             for (int m2 = m1+1; m2 < nmaxima - 1; m2++) {
                 int i2 = maxima[m2];
 
                 fit_line(lfps, sz, i1, i2, params12, &err12, &mse12);
-                if (mse12 > td->qtp.max_line_fit_mse)
+                if (mse12 > pqtp->max_line_fit_mse)
                     continue;
 
                 double dot = params01[2]*params12[2] + params01[3]*params12[3];
@@ -473,11 +481,11 @@ int quad_segment_maxima(apriltag_detector_t *td, zarray_t *cluster, struct line_
                     int i3 = maxima[m3];
 
                     fit_line(lfps, sz, i2, i3, NULL, &err23, &mse23);
-                    if (mse23 > td->qtp.max_line_fit_mse)
+                    if (mse23 > pqtp->max_line_fit_mse)
                         continue;
 
                     fit_line(lfps, sz, i3, i0, NULL, &err30, &mse30);
-                    if (mse30 > td->qtp.max_line_fit_mse)
+                    if (mse30 > pqtp->max_line_fit_mse)
                         continue;
 
                     double err = err01 + err12 + err23 + err30;
@@ -493,17 +501,20 @@ int quad_segment_maxima(apriltag_detector_t *td, zarray_t *cluster, struct line_
         }
     }
 
+	cudaPoolFree(maxima);
+
     if (best_error == HUGE_VALF)
         return 0;
 
     for (int i = 0; i < 4; i++)
         indices[i] = best_indices[i];
 
-    if (best_error / sz < td->qtp.max_line_fit_mse)
+    if (best_error / sz < pqtp->max_line_fit_mse)
         return 1;
     return 0;
 }
 
+#if 0
 // returns 0 if the cluster looks bad.
 int quad_segment_agg(zarray_t *cluster, struct line_fit_pt *lfps, int indices[4])
 {
@@ -614,17 +625,18 @@ int quad_segment_agg(zarray_t *cluster, struct line_fit_pt *lfps, int indices[4]
 
     return 1;
 }
+#endif
 
 /**
  * Compute statistics that allow line fit queries to be
  * efficiently computed for any contiguous range of indices.
  */
-struct line_fit_pt* compute_lfps(int sz, zarray_t* cluster, image_u8_t* im) {
-    struct line_fit_pt *lfps = (struct line_fit_pt *)calloc(sz, sizeof(struct line_fit_pt));
+__device__ struct line_fit_pt* compute_lfps(cudaPool *pcp, int sz, zarray_d_t* cluster, image_u8_t* im) {
+    struct line_fit_pt *lfps = (struct line_fit_pt *)cudaPoolCalloc(pcp, sz, sizeof(struct line_fit_pt));
 
     for (int i = 0; i < sz; i++) {
         struct pt *p;
-        zarray_get_volatile(cluster, i, &p);
+        zarray_d_get_volatile(pcp, cluster, i, &p);
 
         if (i > 0) {
             memcpy(&lfps[i], &lfps[i-1], sizeof(struct line_fit_pt));
@@ -646,7 +658,7 @@ struct line_fit_pt* compute_lfps(int sz, zarray_t* cluster, image_u8_t* im) {
                     im->buf[(iy-1) * im->stride + ix];
 
                 // XXX Tunable. How to shape the gradient magnitude?
-                W = sqrt(grad_x*grad_x + grad_y*grad_y) + 1;
+                W = sqrtf(grad_x*grad_x + grad_y*grad_y) + 1;
             }
 
             double fx = x, fy = y;
@@ -661,7 +673,7 @@ struct line_fit_pt* compute_lfps(int sz, zarray_t* cluster, image_u8_t* im) {
     return lfps;
 }
 
-static inline void ptsort(struct pt *pts, int sz)
+static inline __device__ void ptsort(struct pt *pts, int sz)
 {
 #define MAYBE_SWAP(arr,apos,bpos)                                   \
     if (pt_compare_angle(&(arr[apos]), &(arr[bpos])) > 0) {                        \
@@ -756,17 +768,18 @@ static inline void ptsort(struct pt *pts, int sz)
 }
 
 // return 1 if the quad looks okay, 0 if it should be discarded
-int fit_quad(
-        apriltag_detector_t *td,
+__device__ int fit_quad(
+		cudaPool *pcp,
+		struct apriltag_quad_thresh_params *pqtp,
         image_u8_t *im,
-        zarray_t *cluster,
+        zarray_d_t *cluster,
         struct quad *quad,
         int tag_width,
         bool normal_border,
         bool reversed_border) {
     int res = 0;
 
-    int sz = zarray_size(cluster);
+    int sz = zarray_d_size(cluster);
     if (sz < 24) // Synchronize with later check.
         return 0;
 
@@ -778,14 +791,14 @@ int fit_quad(
     // compute a bounding box so that we can order the points
     // according to their angle WRT the center.
     struct pt *p1;
-    zarray_get_volatile(cluster, 0, &p1);
+    zarray_d_get_volatile(pcp, cluster, 0, &p1);
     uint16_t xmax = p1->x;
     uint16_t xmin = p1->x;
     uint16_t ymax = p1->y;
     uint16_t ymin = p1->y;
-    for (int pidx = 1; pidx < zarray_size(cluster); pidx++) {
+    for (int pidx = 1; pidx < zarray_d_size(cluster); pidx++) {
         struct pt *p;
-        zarray_get_volatile(cluster, pidx, &p);
+        zarray_d_get_volatile(pcp, cluster, pidx, &p);
 
         if (p->x > xmax) {
             xmax = p->x;
@@ -816,9 +829,9 @@ int fit_quad(
 
     float quadrants[2][2] = {{-1*(2 << 15), 0}, {2*(2 << 15), 2 << 15}};
 
-    for (int pidx = 0; pidx < zarray_size(cluster); pidx++) {
+    for (int pidx = 0; pidx < zarray_d_size(cluster); pidx++) {
         struct pt *p;
-        zarray_get_volatile(cluster, pidx, &p);
+        zarray_d_get_volatile(pcp, cluster, pidx, &p);
 
         float dx = p->x - cx;
         float dy = p->y - cy;
@@ -851,18 +864,21 @@ int fit_quad(
     // we now sort the points according to theta. This is a prepatory
     // step for segmenting them into four lines.
     if (1) {
-        ptsort((struct pt*) cluster->data, zarray_size(cluster));
+        ptsort((struct pt*) cluster->data, zarray_d_size(cluster));
     }
 
-    struct line_fit_pt *lfps = compute_lfps(sz, cluster, im);
+    struct line_fit_pt *lfps = compute_lfps(pcp, sz, cluster, im);
 
     int indices[4];
     if (1) {
-        if (!quad_segment_maxima(td, cluster, lfps, indices))
+        if (!quad_segment_maxima(pcp, pqtp, cluster, lfps, indices))
             goto finish;
     } else {
+#if 0
+		// unreachable code ifdefed out
         if (!quad_segment_agg(cluster, lfps, indices))
             goto finish;
+#endif
     }
 
 
@@ -875,7 +891,7 @@ int fit_quad(
         double mse;
         fit_line(lfps, sz, i0, i1, lines[i], NULL, &mse);
 
-        if (mse > td->qtp.max_line_fit_mse) {
+        if (mse > pqtp->max_line_fit_mse) {
             res = 0;
             goto finish;
         }
@@ -966,7 +982,7 @@ int fit_quad(
             double dy2 = quad->p[i2][1] - quad->p[i1][1];
             double cos_dtheta = (dx1*dx2 + dy1*dy2)/sqrt((dx1*dx1 + dy1*dy1)*(dx2*dx2 + dy2*dy2));
 
-            if ((cos_dtheta > td->qtp.cos_critical_rad || cos_dtheta < -td->qtp.cos_critical_rad) || dx1*dy2 < dy1*dx2) {
+            if ((cos_dtheta > pqtp->cos_critical_rad || cos_dtheta < -pqtp->cos_critical_rad) || dx1*dy2 < dy1*dx2) {
                 res = 0;
                 goto finish;
             }
@@ -975,7 +991,7 @@ int fit_quad(
 
   finish:
 
-    free(lfps);
+    cudaPoolFree(lfps);
 
     return res;
 }
@@ -1097,15 +1113,18 @@ static __device__ void proc_unionfind_line2_cuda(unionfind_t *uf, uint8_t const 
     }
 }
 
+#define UF_TASKS_PER_THREAD_TARGET 7
+#define QUAD_TASKS_PER_THREAD_TARGET 4
+
 static __global__ void do_unionfind_line2_cuda(unionfind_t *uf, uint8_t const *pu8Img, int w, int h, int s)
 {
 	int nIdx = blockDim.x * blockIdx.x + threadIdx.x; 
-	int y0 = nIdx * APRILTAG_TASKS_PER_THREAD_TARGET + 1;
+	int y0 = nIdx * UF_TASKS_PER_THREAD_TARGET + 1;
 
 	if (y0 >= h)
 		return;
 
-	int y1 = imin_d(h, y0 + APRILTAG_TASKS_PER_THREAD_TARGET - 1);
+	int y1 = imin_d(h, y0 + UF_TASKS_PER_THREAD_TARGET - 1);
 
     for (int y = y0; y < y1; y++) {
         proc_unionfind_line2_cuda(uf, pu8Img, w, s, y);
@@ -1116,7 +1135,7 @@ static __global__ void do_unionfind_line2_cuda(unionfind_t *uf, uint8_t const *p
 static __global__ void do_unionfind_merge_cuda(unionfind_t *uf, uint8_t *pu8Img, int w, int h, int s)
 {
 	int y = blockDim.x * blockIdx.x + threadIdx.x;
-	y *= APRILTAG_TASKS_PER_THREAD_TARGET;
+	y *= UF_TASKS_PER_THREAD_TARGET;
 
 	if (y >= h)
 		return;
@@ -1136,7 +1155,6 @@ static void do_unionfind_task2(void *p)
         do_unionfind_line2(task->uf, task->im, task->w, task->s, y);
     }
 }
-#endif
 
 static void do_quad_task(void *p)
 {
@@ -1174,6 +1192,40 @@ static void do_quad_task(void *p)
             pthread_mutex_unlock(&td->mutex);
         }
     }
+}
+#endif
+
+static void __global__ do_quad_task_cuda( cudaPool *pcp, struct apriltag_quad_thresh_params *pqtp,
+	int h, int w, int s, zarray_d_t **quad_list, zarray_d_t *clusters, uint8_t *pu8Img, int tag_width,
+	bool normal_border, bool reversed_border )
+{
+	int nTID = blockDim.x * blockIdx.x + threadIdx.x;
+	int sz = zarray_d_size(clusters);
+	int cidx0 = nTID * QUAD_TASKS_PER_THREAD_TARGET;
+	if( cidx0 >= sz)
+		return;
+
+	image_u8_t im = { .width = w, .height = h, .stride = s, .buf = pu8Img };
+
+	int cidx1 = imin_d(sz, cidx0  + APRILTAG_TASKS_PER_THREAD_TARGET);
+
+	quad_list[nTID] = zarray_d_create(pcp, sizeof(quad));
+
+	for (int cidx = cidx0; cidx < cidx1; cidx++) {
+		zarray_d_t **cluster;
+		zarray_d_get_volatile(pcp, clusters, cidx, &cluster );
+
+		if (zarray_d_size(*cluster) < pqtp->min_cluster_pixels)
+			continue;
+
+		struct quad quad;
+		memset( &quad, 0, sizeof(struct quad) );
+
+		if (fit_quad(pcp, pqtp, &im, *cluster, &quad, tag_width, normal_border, reversed_border)) {
+			zarray_d_add(pcp, quad_list[nTID], &quad );
+		}
+	}
+	
 }
 
 void do_minmax_task(void *p)
@@ -1685,14 +1737,24 @@ image_u8_t *threshold_bayer(apriltag_detector_t *td, image_u8_t *im)
 }
 #endif
 
+void vDumpUF( unionfind_t *uf, char const *psz )
+{
+	FILE *fp = fopen( psz, "w" );
+	if (fp) {
+		fwrite( uf->parent, sizeof(uint32_t), (uf->maxid +1) * 2, fp );
+		fclose(fp);
+	}
+}
+
 unionfind_t* connected_components(apriltag_detector_t *td, image_u8_t* threshim, int w, int h, int ts) {
 	cudaPoolAttachHost(td->pcp);
     unionfind_t *uf = unionfind_create(td->pcp, w * h);
 
 	do_unionfind_first_line(uf, threshim, w, ts );
+vDumpUF( uf, "uf-firstline" );
 
 	cudaPoolAttachGlobal(td->pcp);
-	int nTasks = 1 + h / APRILTAG_TASKS_PER_THREAD_TARGET;
+	int nTasks = 1 + h / UF_TASKS_PER_THREAD_TARGET;
 	do_unionfind_line2_cuda<<<1, nTasks>>>(uf, threshim->buf, w, h, ts ); 
 
 #if 0
@@ -1702,7 +1764,7 @@ unionfind_t* connected_components(apriltag_detector_t *td, image_u8_t* threshim,
 	cudaPoolAttachHost(td->pcp);
 
 	// stitch together
-	for (int y = APRILTAG_TASKS_PER_THREAD_TARGET; y < h; y += APRILTAG_TASKS_PER_THREAD_TARGET) {
+	for (int y = UF_TASKS_PER_THREAD_TARGET; y < h; y += UF_TASKS_PER_THREAD_TARGET) {
 		do_unionfind_line2( uf, threshim, w, ts, y );
 	}
 #endif
@@ -2031,9 +2093,8 @@ __global__ void do_gradient_clusters_cuda(cudaPool *pcp, uint8_t const *pu8Img, 
 
 zarray_d_t* merge_clusters(cudaPool *pcp, zarray_d_t* c1, zarray_d_t* c2) {
 
-	printf( "merge_clusters( %p, %p, %p )\n", pcp, c1, c2 );
     zarray_d_t* ret = zarray_d_create(pcp, sizeof(struct cluster_hash*));
-printf( "c1 -> %d c2 -> %d\n", zarray_d_size(c1), zarray_d_size(c2) );
+//printf( "c1 -> %d c2 -> %d\n", zarray_d_size(c1), zarray_d_size(c2) );
     zarray_d_ensure_capacity(pcp, ret, zarray_d_size(c1) + zarray_d_size(c2));
 
     int i1 = 0;
@@ -2047,6 +2108,7 @@ printf( "c1 -> %d c2 -> %d\n", zarray_d_size(c1), zarray_d_size(c2) );
         zarray_d_get_volatile(pcp, c1, i1, &h1);
         zarray_d_get_volatile(pcp, c2, i2, &h2);
 
+//		printf( "h1: %ld %x  h2: %ld %x\n", (*h1)->id, (*h1)->hash, (*h2)->id, (*h2)->hash );
         if ((*h1)->hash == (*h2)->hash && (*h1)->id == (*h2)->id) {
             zarray_d_add_range(pcp, (*h1)->data, (*h2)->data, 0, zarray_d_size((*h2)->data));
             zarray_d_add(pcp, ret, h1);
@@ -2122,8 +2184,11 @@ zarray_d_t* gradient_clusters(apriltag_detector_t *td, image_u8_t* threshim, int
     return clusters;
 }
 
-zarray_t* fit_quads(apriltag_detector_t *td, int w, int h, zarray_t* clusters, image_u8_t* im) {
-    zarray_t *quads = zarray_create(sizeof(struct quad));
+zarray_d_t* fit_quads(apriltag_detector_t *td, int w, int h, zarray_d_t* clusters, image_u8_t* im) {
+	cudaPoolAttachHost(td->pcp);
+	struct apriltag_quad_thresh_params *pqtp = (struct apriltag_quad_thresh_params *)cudaPoolMalloc( td->pcp, sizeof(*pqtp) );
+	*pqtp = td->qtp;
+	
 
     bool normal_border = false;
     bool reversed_border = false;
@@ -2143,36 +2208,30 @@ zarray_t* fit_quads(apriltag_detector_t *td, int w, int h, zarray_t* clusters, i
         min_tag_width = 3;
     }
 
-    int sz = zarray_size(clusters);
-    int chunksize = 1 + sz / (APRILTAG_TASKS_PER_THREAD_TARGET * td->nthreads);
-    struct quad_task *tasks = (struct quad_task *)malloc(sizeof(struct quad_task)*(sz / chunksize + 1));
+    int sz = zarray_d_size(clusters);
+	int nTasks = 1 + sz / QUAD_TASKS_PER_THREAD_TARGET;
 
-    int ntasks = 0;
-    for (int i = 0; i < sz; i += chunksize) {
-        tasks[ntasks].td = td;
-        tasks[ntasks].cidx0 = i;
-        tasks[ntasks].cidx1 = imin(sz, i + chunksize);
-        tasks[ntasks].h = h;
-        tasks[ntasks].w = w;
-        tasks[ntasks].quads = quads;
-        tasks[ntasks].clusters = clusters;
-        tasks[ntasks].im = im;
-        tasks[ntasks].tag_width = min_tag_width;
-        tasks[ntasks].normal_border = normal_border;
-        tasks[ntasks].reversed_border = reversed_border;
+	zarray_d_t **quad_list = (zarray_d_t **)cudaPoolCalloc( td->pcp, nTasks, sizeof(zarray_d_t *) );
 
-        workerpool_add_task(td->wp, do_quad_task, &tasks[ntasks]);
-        ntasks++;
-    }
+	do_quad_task_cuda<<<1, nTasks>>>( td->pcp, pqtp, h, w, im->stride, quad_list, clusters, im->buf, min_tag_width, normal_border, reversed_border );
 
-    workerpool_run(td->wp);
+	cudaPoolAttachHost(td->pcp);
 
-    free(tasks);
+    zarray_d_t *quads = zarray_d_create(td->pcp, sizeof(struct quad));
+	for (int i = 0; i < nTasks; i++) {
+		int nelem = zarray_d_size(quad_list[i]);
+		if (nelem) {
+			zarray_d_add_range(td->pcp, quads, quad_list[i], 0, nelem-1);
+		}
+		zarray_d_destroy(td->pcp, quad_list[i]);
+	}
+	cudaPoolFree(quad_list);
+	cudaPoolFree(pqtp);
 
     return quads;
 }
 
-zarray_t *apriltag_quad_thresh(apriltag_detector_t *td, image_u8_t *im)
+zarray_d_t *apriltag_quad_thresh(apriltag_detector_t *td, image_u8_t *im)
 {
     ////////////////////////////////////////////////////////
     // step 1. threshold the image, creating the edge image.
@@ -2288,14 +2347,11 @@ zarray_t *apriltag_quad_thresh(apriltag_detector_t *td, image_u8_t *im)
     ////////////////////////////////////////////////////////
     // step 3. process each connected component.
 
-#ifdef THF
-    zarray_t* quads = fit_quads(td, w, h, clusters, im);
-#else
-    zarray_t *quads = zarray_create(sizeof(struct quad));
-#endif
+    zarray_d_t* quads = fit_quads(td, w, h, clusters, im);
 
-#if 0
+#if 1
     if (td->debug) {
+		cudaPoolAttachHost( td->pcp );
         FILE *f = fopen("debug_lines.ps", "w");
         fprintf(f, "%%!PS\n\n");
 
@@ -2313,9 +2369,9 @@ zarray_t *apriltag_quad_thresh(apriltag_detector_t *td, image_u8_t *im)
 
         image_u8_destroy(im2);
 
-        for (int i = 0; i < zarray_size(quads); i++) {
+        for (int i = 0; i < zarray_d_size(quads); i++) {
             struct quad *q;
-            zarray_get_volatile(quads, i, &q);
+            zarray_d_get_volatile(td->pcp, quads, i, &q);
 
             float rgb[3];
             int bias = 100;

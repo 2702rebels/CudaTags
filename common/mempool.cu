@@ -249,7 +249,7 @@ __host__ __device__ void cudaPoolFree( void *p )
 		__threadfence();
 		asm("trap;");
 #else
-		fprintf( stderr, "Headstone Not Valid\n" );
+		fprintf( stderr, "%d Headstone Not Valid\n",__LINE__ );
 		exit(1);
 #endif
 	}
@@ -332,7 +332,7 @@ __host__ __device__ void cudaPoolFree( void *p )
 			__threadfence();
 			asm("trap;");
 #else
-			fprintf( stderr, "Headstone Not Valid\n" );
+			fprintf( stderr, "%d Headstone Not Valid\n",__LINE__ );
 			exit(1);
 #endif
 		}
@@ -477,7 +477,7 @@ __host__ __device__ void *cudaPoolRealloc( cudaPool *pcp, void *p, size_t s)
 		__threadfence();
 		asm("trap;");
 #else
-		fprintf( stderr, "Headstone Not Valid\n" );
+		fprintf( stderr, "%d Headstone Not Valid\n",__LINE__ );
 		exit(1);
 #endif
 	}

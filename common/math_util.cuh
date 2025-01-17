@@ -63,7 +63,7 @@ static inline float fsq(float v)
     return v*v;
 }
 
-static inline double sq(double v)
+static __device__ __host__ inline double sq(double v)
 {
     return v*v;
 }

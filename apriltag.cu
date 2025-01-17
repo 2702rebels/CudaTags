@@ -49,6 +49,7 @@ either expressed or implied, of the Regents of The University of Michigan.
 #include "common/math_util.cuh"
 #include "common/g2d.cuh"
 #include "common/debug_print.cuh"
+#include "common/zarray_d.cuh"
 
 #include "apriltag_math.cuh"
 
@@ -68,7 +69,7 @@ static inline long int random(void)
 
 #define APRILTAG_U64_ONE ((uint64_t) 1)
 
-extern zarray_t *apriltag_quad_thresh(apriltag_detector_t *td, image_u8_t *im);
+extern zarray_d_t *apriltag_quad_thresh(apriltag_detector_t *td, image_u8_t *im);
 
 // Regresses a model of the form:
 // intensity(x,y) = C0*x + C1*y + CC2
@@ -400,7 +401,7 @@ void apriltag_detector_destroy(apriltag_detector_t *td)
 struct quad_decode_task
 {
     int i0, i1;
-    zarray_t *quads;
+    zarray_d_t *quads;
     apriltag_detector_t *td;
 
     image_u8_t *im;
@@ -925,7 +926,7 @@ static void quad_decode_task(void *_u)
 
     for (int quadidx = task->i0; quadidx < task->i1; quadidx++) {
         struct quad *quad_original;
-        zarray_get_volatile(task->quads, quadidx, &quad_original);
+        zarray_d_get_volatile(td->pcp, task->quads, quadidx, &quad_original);
 
         // refine edges is not dependent upon the tag family, thus
         // apply this optimization BEFORE the other work.
@@ -1111,14 +1112,14 @@ zarray_t *apriltag_detector_detect(apriltag_detector_t *td, image_u8_t *im_orig)
 		cudaPoolAttachGlobal( td->pcp );
 	}
 #endif
-    zarray_t *quads = apriltag_quad_thresh(td, quad_im);
+    zarray_d_t *quads = apriltag_quad_thresh(td, quad_im);
 
     // adjust centers of pixels so that they correspond to the
     // original full-resolution image.
     if (td->quad_decimate > 1) {
-        for (int i = 0; i < zarray_size(quads); i++) {
+        for (int i = 0; i < zarray_d_size(quads); i++) {
             struct quad *q;
-            zarray_get_volatile(quads, i, &q);
+            zarray_d_get_volatile(td->pcp, quads, i, &q);
 
             for (int j = 0; j < 4; j++) {
                 q->p[j][0] *= td->quad_decimate;
@@ -1132,7 +1133,7 @@ zarray_t *apriltag_detector_detect(apriltag_detector_t *td, image_u8_t *im_orig)
 
     zarray_t *detections = zarray_create(sizeof(apriltag_detection_t*));
 
-    td->nquads = zarray_size(quads);
+    td->nquads = zarray_d_size(quads);
 
     timeprofile_stamp(td->tp, "quads");
 
@@ -1145,9 +1146,9 @@ zarray_t *apriltag_detector_detect(apriltag_detector_t *td, image_u8_t *im_orig)
 
         srandom(0);
 
-        for (int i = 0; i < zarray_size(quads); i++) {
+        for (int i = 0; i < zarray_d_size(quads); i++) {
             struct quad *quad;
-            zarray_get_volatile(quads, i, &quad);
+            zarray_d_get_volatile(td->pcp, quads, i, &quad);
 
             const int bias = 100;
             int color = bias + (random() % (255-bias));
@@ -1168,14 +1169,14 @@ zarray_t *apriltag_detector_detect(apriltag_detector_t *td, image_u8_t *im_orig)
     if (1) {
         image_u8_t *im_samples = td->debug ? image_u8_copy(im_orig) : NULL;
 
-        int chunksize = 1 + zarray_size(quads) / (APRILTAG_TASKS_PER_THREAD_TARGET * td->nthreads);
+        int chunksize = 1 + zarray_d_size(quads) / (APRILTAG_TASKS_PER_THREAD_TARGET * td->nthreads);
 
-        struct quad_decode_task *tasks = (struct quad_decode_task *)malloc(sizeof(struct quad_decode_task)*(zarray_size(quads) / chunksize + 1));
+        struct quad_decode_task *tasks = (struct quad_decode_task *)malloc(sizeof(struct quad_decode_task)*(zarray_d_size(quads) / chunksize + 1));
 
         int ntasks = 0;
-        for (int i = 0; i < zarray_size(quads); i+= chunksize) {
+        for (int i = 0; i < zarray_d_size(quads); i+= chunksize) {
             tasks[ntasks].i0 = i;
-            tasks[ntasks].i1 = imin(zarray_size(quads), i + chunksize);
+            tasks[ntasks].i1 = imin(zarray_d_size(quads), i + chunksize);
             tasks[ntasks].quads = quads;
             tasks[ntasks].td = td;
             tasks[ntasks].im = im_orig;
@@ -1204,9 +1205,9 @@ zarray_t *apriltag_detector_detect(apriltag_detector_t *td, image_u8_t *im_orig)
 
         srandom(0);
 
-        for (int i = 0; i < zarray_size(quads); i++) {
+        for (int i = 0; i < zarray_d_size(quads); i++) {
             struct quad *quad;
-            zarray_get_volatile(quads, i, &quad);
+            zarray_d_get_volatile(td->pcp, quads, i, &quad);
 
             const int bias = 100;
             int color = bias + (random() % (255-bias));
@@ -1398,9 +1399,9 @@ zarray_t *apriltag_detector_detect(apriltag_detector_t *td, image_u8_t *im_orig)
 
         image_u8_destroy(darker);
 
-        for (int i = 0; i < zarray_size(quads); i++) {
+        for (int i = 0; i < zarray_d_size(quads); i++) {
             struct quad *q;
-            zarray_get_volatile(quads, i, &q);
+            zarray_d_get_volatile(td->pcp, quads, i, &q);
 
             float rgb[3];
             int bias = 100;
@@ -1424,14 +1425,14 @@ zarray_t *apriltag_detector_detect(apriltag_detector_t *td, image_u8_t *im_orig)
 
     timeprofile_stamp(td->tp, "debug output");
 
-    for (int i = 0; i < zarray_size(quads); i++) {
+    for (int i = 0; i < zarray_d_size(quads); i++) {
         struct quad *quad;
-        zarray_get_volatile(quads, i, &quad);
+        zarray_d_get_volatile(td->pcp, quads, i, &quad);
         matd_destroy(quad->H);
         matd_destroy(quad->Hinv);
     }
 
-    zarray_destroy(quads);
+    zarray_d_destroy(td->pcp, quads);
 
     zarray_sort(detections, detection_compare_function);
     timeprofile_stamp(td->tp, "cleanup");
