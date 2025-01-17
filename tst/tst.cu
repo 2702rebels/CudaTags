@@ -56,12 +56,12 @@ int main( int argc, char **argv )
 
 	td->quad_decimate = 2;
 	td->nthreads = 1;
-	td->debug = 1;
+	td->debug = 0;
 	image_u8_t *pim = image_u8_create_stride( m.cols, m.rows, m.cols );
 	pim->buf = m.ptr();
 
 	image_u8_t *pcuda = image_u8_copy_cuda( td->pcp, pim );
-	int nIter = 1;
+	int nIter = 1000;
 	for (int i = 0; i < nIter; i++) {
 		zarray_t *detections = apriltag_detector_detect(td, pcuda);
 		printf( "%d detections\n", zarray_size(detections) );
@@ -70,18 +70,15 @@ int main( int argc, char **argv )
 			apriltag_detection_t *det;
 			zarray_get(detections, i, &det);
 
+#if 0
 			printf( "Ctr: %9.2f, %9.2f\n", det->c[0], det->c[1] );
 			for (int c = 0; c < 4; c++  ) {
 				printf( "C%d : %9.2f, %9.2f\n", c + 1, det->p[c][0], det->p[c][1] );
 			}
+#endif
 
 		}
 		apriltag_detections_destroy( detections );
-		
-		for( int i = 0; i <=128; i++) {
-			printf( "Task %d\n", i );
-			vCheckPool( td->pcp, i );
-		}
 	}
 //	printf( "Detected %d\n", detections->size );
 	return 0;

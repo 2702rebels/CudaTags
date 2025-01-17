@@ -177,7 +177,6 @@ static inline __host__ __device__ void zarray_d_ensure_capacity( cudaPool *pcp, 
             za->alloc = 8;
     }
 	
-	char *nd = (char *)cudaPoolMalloc( pcp, za->alloc * za->el_sz );
 	za->data = (char *)cudaPoolRealloc( pcp, za->data, za->alloc * za->el_sz );
 }
 

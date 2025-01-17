@@ -22,6 +22,10 @@ struct MPElmnt {
 	uint8_t			u8TID;
 	uint32_t		u32Len;
 	MPool			*pmp;
+#if (CUDAPOOL_DEBUG)
+	char const		*pszFile;
+	int				nLine;
+#endif
 	mplistelmnt		mlfree;
 };
 
@@ -98,6 +102,10 @@ static void MPoolInit( MPool *p, size_t s, int tid )
 	pHead->u8Flags = MEM_HEADBLOCK;
 	pHead->u8TID = tid;
 	pHead->u32Len = sizeof(MPElmnt) + sizeof(MPFootStone);
+#if (CUDAPOOL_DEBUG)
+	pHead->pszFile = __FILE__;
+	pHead->nLine = __LINE__;
+#endif
 	vSetFootStone( pHead );
 	
 	// now create one at the end of the pool
@@ -106,6 +114,10 @@ static void MPoolInit( MPool *p, size_t s, int tid )
 	pTail->u16HeadStone = MEM_HS;
 	pTail->u8Flags = MEM_TAILBLOCK;
 	pTail->u8TID = tid;
+#if (CUDAPOOL_DEBUG)
+	pTail->pszFile = __FILE__;
+	pTail->nLine = __LINE__;
+#endif
 	pTail->u32Len = sizeof(MPElmnt) + sizeof(MPFootStone);
 	vSetFootStone( pTail );
 
@@ -118,6 +130,10 @@ static void MPoolInit( MPool *p, size_t s, int tid )
 	pHead->u32Len = s - 2 *(sizeof(MPElmnt) + sizeof(MPFootStone));
 	pHead->mlfree.pNext = 0;
 	pHead->mlfree.pPrev = 0;
+#if (CUDAPOOL_DEBUG)
+	pHead->pszFile = __FILE__;
+	pHead->nLine = __LINE__;
+#endif
 	vSetFootStone( pHead );
 
 	p->mlfree.pHead = pHead;
@@ -157,7 +173,11 @@ void vCheckMPool( MPool *pmp )
 	
 	vCheckBlock( pmp, pel, "vCheckMPool:" );
 	do {
+#if (CUDAPOOL_DEBUG)
+		printf( "Mem %p: %d  %u  %s:%d\n", pel, pel->u8Flags, pel->u32Len, pel->pszFile, pel->nLine );
+#else
 		printf( "Mem %p: %d  %u\n", pel, pel->u8Flags, pel->u32Len );
+#endif
 
 		pel = (MPElmnt *)(((uint8_t *)pel) + pel->u32Len);
 		if (pel->u16HeadStone != MEM_HS) {
@@ -241,7 +261,11 @@ __host__ __device__ void cudaPoolFree( void *p )
 {
 }
 #else
+#if (CUDAPOOL_DEBUG)
+__host__ __device__ void cudaPoolFreeDbg( void *p, char const *pszFile, int nLine )
+#else
 __host__ __device__ void cudaPoolFree( void *p )
+#endif
 {
 	MPElmnt *pE = (MPElmnt *)(((uint8_t *)p) - offsetof(MPElmnt, mlfree));
 	if (pE->u16HeadStone != MEM_HS) {
@@ -249,8 +273,12 @@ __host__ __device__ void cudaPoolFree( void *p )
 		__threadfence();
 		asm("trap;");
 #else
-		fprintf( stderr, "%d Headstone Not Valid\n",__LINE__ );
-		exit(1);
+#if (CUDAPOOL_DEBUG)
+		fprintf( stderr, "%d Headstone Not Valid.  Called from %s:%d\n",__LINE__, pszFile, nLine );
+#else
+		fprintf( stderr, "%d Headstone Not Valid.\n",__LINE__ );
+#endif
+		abort();
 #endif
 	}
 #ifdef __CUDA_ARCH__
@@ -278,8 +306,12 @@ __host__ __device__ void cudaPoolFree( void *p )
 			__threadfence();
 			asm("trap;");
 #else
-			fprintf( stderr, "Headstone (next) Not Valid\n" );
-			exit(1);
+#if (CUDAPOOL_DEBUG)
+			fprintf( stderr, "Headstone (next) Not Valid: Called from %s:%d\n", pszFile, nLine );
+#else
+			fprintf( stderr, "Headstone (next) Not Valid.\n" );
+#endif
+			abort();
 #endif
 		}
 		// If next block has been released by another thread,
@@ -321,8 +353,12 @@ __host__ __device__ void cudaPoolFree( void *p )
 			__threadfence();
 			asm("trap;");
 #else
+#if (CUDAPOOL_DEBUG)
+			fprintf( stderr, "Footstone Not Valid. Called from %s:%d\n", pszFile, nLine );
+#else
 			fprintf( stderr, "Footstone Not Valid\n" );
-			exit(1);
+#endif
+			abort();
 #endif
 		}
 
@@ -332,8 +368,12 @@ __host__ __device__ void cudaPoolFree( void *p )
 			__threadfence();
 			asm("trap;");
 #else
+#if (CUDAPOOL_DEBUG)
+			fprintf( stderr, "%d Headstone Not Valid: Called from %s:%d\n",__LINE__, pszFile, nLine );
+#else
 			fprintf( stderr, "%d Headstone Not Valid\n",__LINE__ );
-			exit(1);
+#endif
+			abort();
 #endif
 		}
 
@@ -385,7 +425,11 @@ __host__ __device__ void cudaPoolFree( void *p )
 }
 #endif
 
+#if (CUDAPOOL_DEBUG)
+static __host__ __device__ void *mpAlloc( MPool *p, size_t s, char const *pszFile, int nLine )
+#else
 static __host__ __device__ void *mpAlloc( MPool *p, size_t s )
+#endif
 {
 	size_t sReq = (s + sizeof(MPElmnt) + sizeof(MPFootStone) + (MEM_ALIGNMENT -1)) & ~(MEM_ALIGNMENT - 1);
 	MPElmnt *pE = p->mlfree.pHead;
@@ -405,7 +449,7 @@ static __host__ __device__ void *mpAlloc( MPool *p, size_t s )
 	}
 
 	// if block is too small to split
-	if (pE->u32Len < (sReq + 2 * sizeof(MPElmnt))) {
+	if (pE->u32Len < (sReq + 2 * (sizeof(MPElmnt) + sizeof(MPFootStone)))) {
 		if (pE->mlfree.pPrev) {
 			// Unlink from free list
 			pE->mlfree.pPrev->mlfree.pNext = pE->mlfree.pNext;
@@ -422,7 +466,10 @@ static __host__ __device__ void *mpAlloc( MPool *p, size_t s )
 			// last element in free list, move tail to prev
 			p->mlfree.pTail = pE->mlfree.pPrev;
 		}
-		
+#if (CUDAPOOL_DEBUG)
+		pE->pszFile = pszFile;
+		pE->nLine = nLine;
+#endif
 		pE->u8Flags = MEM_INUSE;
 		pE->u8TID = p->stTID;
 		return (void *)(&pE->mlfree);
@@ -436,6 +483,10 @@ static __host__ __device__ void *mpAlloc( MPool *p, size_t s )
 		pNE->u16HeadStone = MEM_HS;
 		pNE->u8Flags = MEM_INUSE;
 		pNE->u8TID = p->stTID;
+#if (CUDAPOOL_DEBUG)
+		pNE->pszFile = pszFile;
+		pNE->nLine = nLine;
+#endif
 		vSetFootStone( pNE );
 
 		pE->u32Len -= sReq;
@@ -445,29 +496,55 @@ static __host__ __device__ void *mpAlloc( MPool *p, size_t s )
 	}
 }
 
+#if (CUDAPOOL_DEBUG)
+__host__ __device__ void *cudaPoolMallocDbg( cudaPool *pcp, size_t s, char const *pszFile, int nLine )
+#else
 __host__ __device__ void *cudaPoolMalloc( cudaPool *pcp, size_t s )
+#endif
 {
 #ifdef __CUDA_ARCH__
 	int nTID = threadIdx.x + 1;
 #else
 	int nTID = 0;
 #endif
+
 	MPool *pmp = getMemPool( pcp, nTID );
+
+#if (CUDAPOOL_DEBUG)
+	return mpAlloc( pmp, s, pszFile, nLine );
+#else
 	return mpAlloc( pmp, s );
+#endif
 }
 
+#if (CUDAPOOL_DEBUG)
+__host__ __device__ void *cudaPoolCallocDbg( cudaPool *pcp, size_t n, size_t s, char const *pszFile, int nLine )
+#else
 __host__ __device__ void *cudaPoolCalloc( cudaPool *pcp, size_t n, size_t s)
+#endif
 {
 	size_t sTot = n * s;
+#if (CUDAPOOL_DEBUG)
+	void *p = cudaPoolMallocDbg( pcp, sTot, pszFile, nLine );
+#else
 	void *p = cudaPoolMalloc( pcp, sTot );
+#endif
 	memset( p, 0, sTot );
 	return p;
 }
 
+#if (CUDAPOOL_DEBUG)
+__host__ __device__ void *cudaPoolReallocDbg( cudaPool *pcp, void *p, size_t s, char const *pszFile, int nLine)
+#else
 __host__ __device__ void *cudaPoolRealloc( cudaPool *pcp, void *p, size_t s)
+#endif
 {
 	if (!p) {
+#if (CUDAPOOL_DEBUG)
+		return cudaPoolMallocDbg( pcp, s, pszFile, nLine );
+#else
 		return cudaPoolMalloc( pcp, s );
+#endif
 	}
 	size_t sReq = (s + sizeof(MPElmnt) + sizeof(MPFootStone) + (MEM_ALIGNMENT -1)) & ~(MEM_ALIGNMENT - 1);
 
@@ -496,23 +573,45 @@ __host__ __device__ void *cudaPoolRealloc( cudaPool *pcp, void *p, size_t s)
 		return (void *)(&pE->mlfree);
 	}
 
+#if (CUDAPOOL_DEBUG)
+	void *pNew = cudaPoolMallocDbg( pcp, s, pszFile, nLine );
+#else
 	void *pNew = cudaPoolMalloc( pcp, s );
+#endif
 	memcpy( pNew, p, pE->u32Len - sizeof(MPElmnt) - sizeof(MPFootStone) );
 
+#if (CUDAPOOL_DEBUG)
+	cudaPoolFreeDbg( p, pszFile, nLine );
+#else
 	cudaPoolFree( p );
+#endif
 	return pNew;
 
 }
 
+#if (CUDAPOOL_DEBUG)
+void cudaPoolAttachHostDbg( cudaPool *pcp, char const *pszFile, int nLine )
+#else
 void cudaPoolAttachHost( cudaPool *pcp )
+#endif
 {
+#if (CUDAPOOL_DEBUG)
+	printf( "cudaPoolAttachHost @ %s:%d\n", pszFile, nLine );
+#endif
 	// attach memory pools to HOST CPU
 	cudaDeviceSynchronize();
 	cudaStreamAttachMemAsync( 0, pcp, pcp->m_stAlloc, cudaMemAttachHost );
 }
 
+#if (CUDAPOOL_DEBUG)
+void cudaPoolAttachGlobal( cudaPool *pcp, char const *pszFile, int nLine )
+#else
 void cudaPoolAttachGlobal( cudaPool *pcp )
+#endif
 {
+#if (CUDAPOOL_DEBUG)
+	printf( "cudaPoolAttachGlobal @ %s:%d\n", pszFile, nLine );
+#endif
 	cudaStreamAttachMemAsync( 0, pcp, pcp->m_stAlloc, cudaMemAttachGlobal );
 	cudaDeviceSynchronize();
 }
