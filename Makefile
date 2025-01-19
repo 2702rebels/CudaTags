@@ -3,7 +3,7 @@ OBJS=apriltag.o apriltag_quad_thresh.o tag36h11.o
 .SUFFIXES: .cu
 
 .cu.o:
-	nvcc -DNDEBUG -I. -g -c  $<
+	nvcc -DNDEBUG -I. -pg -O3 -c  $<
 	ar r libcudatags.a $@
 
 .c.o:

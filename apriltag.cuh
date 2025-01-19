@@ -45,7 +45,7 @@ extern "C" {
 
 // Todo:  make these configurable
 #define APRILTAG_MAX_CUDA_THREADS	128
-#define APRILTAG_CUDA_MEMPOOL_SIZE	1024*1024*2
+#define APRILTAG_CUDA_MEMPOOL_SIZE	512*1024
 
 struct quad
 {

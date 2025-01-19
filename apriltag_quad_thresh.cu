@@ -1497,13 +1497,13 @@ static __global__ void do_thresh_edge_cuda( uint8_t *pu8ThreshBuf, uint8_t *pu8I
 
 image_u8_t *threshold(apriltag_detector_t *td, image_u8_t *im)
 {
-	cudaPoolAttachHost( td->pcp );
+//	cudaPoolAttachHost( td->pcp );
     int w = im->width, h = im->height, s = im->stride;
     assert(w < 32768);
     assert(h < 32768);
 
     image_u8_t *threshim = image_u8_create_alignment_cuda(td->pcp, w, h, s);
-	cudaPoolAttachHost( td->pcp );
+//	cudaPoolAttachHost( td->pcp );
 
     assert(threshim->stride == s);
 
@@ -1747,7 +1747,7 @@ void vDumpUF( unionfind_t *uf, char const *psz )
 }
 
 unionfind_t* connected_components(apriltag_detector_t *td, image_u8_t* threshim, int w, int h, int ts) {
-	cudaPoolAttachHost(td->pcp);
+//	cudaPoolAttachHost(td->pcp);
     unionfind_t *uf = unionfind_create(td->pcp, w * h);
 
 	do_unionfind_first_line(uf, threshim, w, ts );
@@ -2141,7 +2141,8 @@ zarray_d_t* gradient_clusters(apriltag_detector_t *td, image_u8_t* threshim, int
     int sz = h - 1;
 	int ntasks = (1 + sz / APRILTAG_TASKS_PER_THREAD_TARGET);
 
-	cudaPoolAttachHost( td->pcp );
+printf( "gradient_clusters split across %d tasks\n", ntasks );
+//	cudaPoolAttachHost( td->pcp );
 	zarray_d_t **clusters_list = (zarray_d_t **)cudaPoolCalloc( td->pcp, ntasks, sizeof(zarray_d_t *));
 	
 	cudaPoolAttachGlobal( td->pcp );
@@ -2185,7 +2186,7 @@ zarray_d_t* gradient_clusters(apriltag_detector_t *td, image_u8_t* threshim, int
 }
 
 zarray_d_t* fit_quads(apriltag_detector_t *td, int w, int h, zarray_d_t* clusters, image_u8_t* im) {
-	cudaPoolAttachHost(td->pcp);
+//	cudaPoolAttachHost(td->pcp);
 	struct apriltag_quad_thresh_params *pqtp = (struct apriltag_quad_thresh_params *)cudaPoolMalloc( td->pcp, sizeof(*pqtp) );
 	*pqtp = td->qtp;
 	
@@ -2213,6 +2214,8 @@ zarray_d_t* fit_quads(apriltag_detector_t *td, int w, int h, zarray_d_t* cluster
 
 	zarray_d_t **quad_list = (zarray_d_t **)cudaPoolCalloc( td->pcp, nTasks, sizeof(zarray_d_t *) );
 
+printf( "fit_queads split across %d tasks\n", nTasks );
+	cudaPoolAttachGlobal(td->pcp);
 	do_quad_task_cuda<<<1, nTasks>>>( td->pcp, pqtp, h, w, im->stride, quad_list, clusters, im->buf, min_tag_width, normal_border, reversed_border );
 
 	cudaPoolAttachHost(td->pcp);
@@ -2242,7 +2245,7 @@ zarray_d_t *apriltag_quad_thresh(apriltag_detector_t *td, image_u8_t *im)
     image_u8_t *threshim = threshold(td, im);
     int ts = threshim->stride;
 
-	cudaPoolAttachHost( td->pcp );
+//	cudaPoolAttachHost( td->pcp );
     if (td->debug)
         image_u8_write_pnm(threshim, "debug_threshold.pnm");
 

@@ -61,7 +61,7 @@ int main( int argc, char **argv )
 	pim->buf = m.ptr();
 
 	image_u8_t *pcuda = image_u8_copy_cuda( td->pcp, pim );
-	int nIter = 1000;
+	int nIter = 2;
 	for (int i = 0; i < nIter; i++) {
 		zarray_t *detections = apriltag_detector_detect(td, pcuda);
 		printf( "%d detections\n", zarray_size(detections) );

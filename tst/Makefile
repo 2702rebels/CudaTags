@@ -1,11 +1,11 @@
 #CFLAGS=-I/usr/local/include/opencv4 -I.. -O3 -pg
-CFLAGS=-I/usr/local/include/opencv4 -I.. -g
+CFLAGS=-I/usr/local/include/opencv4 -I.. -O3
 OBJS=tst.o
 
 .SUFFIXES: .cu
 
 .cu.o:
-	nvcc $(CFLAGS) -c $<
+	nvcc $(CFLAGS) -pg -c $<
 	ar r libcudatags.a $@
 
 .PHONY: libcudatags

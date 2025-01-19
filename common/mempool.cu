@@ -604,7 +604,7 @@ void cudaPoolAttachHost( cudaPool *pcp )
 }
 
 #if (CUDAPOOL_DEBUG)
-void cudaPoolAttachGlobal( cudaPool *pcp, char const *pszFile, int nLine )
+void cudaPoolAttachGlobalDbg( cudaPool *pcp, char const *pszFile, int nLine )
 #else
 void cudaPoolAttachGlobal( cudaPool *pcp )
 #endif

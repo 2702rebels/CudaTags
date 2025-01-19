@@ -4,7 +4,7 @@ OBJS=g2d.o image_u8.o image_u8x3.o matd.o pnm.o svd22.o time_util.o workerpool.o
 .SUFFIXES: .cu
 
 .cu.o:
-	nvcc -DNDEBUG -arch=sm_52 -dc -pg -I.. -g -c $<
+	nvcc -DNDEBUG -arch=sm_52 -dc -pg -I.. -O3 -c $<
 	ar r ../libcudatags.a $@
 
 .c.o:

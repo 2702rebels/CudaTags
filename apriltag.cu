@@ -380,7 +380,7 @@ apriltag_detector_t *apriltag_detector_create()
 
     td->debug = false;
 
-	td->pcp = cudaPoolCreate( APRILTAG_MAX_CUDA_THREADS, APRILTAG_CUDA_MEMPOOL_SIZE, 8 * 1024 * 1024 );
+	td->pcp = cudaPoolCreate( APRILTAG_MAX_CUDA_THREADS, APRILTAG_CUDA_MEMPOOL_SIZE, 4 * 1024 * 1024 );
     // NB: defer initialization of td->wp so that the user can
     // override td->nthreads.
 
